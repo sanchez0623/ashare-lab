@@ -1,6 +1,6 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {fixture,withEvent} from './fixture.mjs';import {auditBundle,prepareBundle} from '../dist/quality.mjs';import {backtest,defaults,compareParameters,qualityScore,wilson} from '../dist/engine.mjs';import {boardRule,buyQuantity,knownLimits} from '../dist/rules.mjs';import {CorporateLedger} from '../dist/corporate.mjs';
-const config=b=>({...defaults,strategy:'ma',timeframe:'5m',from:b.calendar[40],to:b.calendar.at(-1),fast:2,slow:3,taxMode:'manual',commission:0,minCommission:0,transfer:0,stamp:0,slippage:0,stop:8,take:0});
+const config=b=>({...defaults,capital:100000,strategy:'ma',timeframe:'5m',from:b.calendar[40],to:b.calendar.at(-1),fast:2,slow:3,taxMode:'manual',management:'base',handling:0,regulatory:0,commission:0,minCommission:0,transfer:0,stamp:0,slippage:0,stop:8,take:0});
 test('board quantity and historical price limits use historical dates',()=>{
  assert.equal(boardRule('chinext','2020-08-21').pct,10);assert.equal(boardRule('chinext','2020-08-24').pct,20);assert.equal(boardRule('main','2026-07-03',1).pct,5);assert.equal(boardRule('main','2026-07-06',1).pct,10);assert.equal(boardRule('star','2024-01-01',1).pct,20);assert.equal(boardRule('bse','2024-01-01',1).pct,30);
  assert.equal(buyQuantity(1990,10,boardRule('star','2024-01-01')),0);assert.equal(buyQuantity(2370,10,boardRule('star','2024-01-01')),237);assert.equal(buyQuantity(1370,10,boardRule('bse','2024-01-01')),137);assert.equal(buyQuantity(1370,10,boardRule('main','2024-01-01')),100);
