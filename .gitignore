@@ -1,0 +1,12 @@
+node_modules/
+dist/client/
+dist/server/
+.wrangler/
+.sites-runtime/
+collector/__pycache__/
+collector/.venv/
+*.sqlite*
+collector/raw/
+collector/output/
+.env
+.env.*

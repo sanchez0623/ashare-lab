@@ -1,0 +1,9 @@
+[Unit]
+Description=Sync A-share research data after market close
+[Timer]
+OnCalendar=Mon..Fri *-*-* 16:30:00 Asia/Shanghai
+Persistent=true
+RandomizedDelaySec=300
+Unit=ashare-sync.service
+[Install]
+WantedBy=timers.target

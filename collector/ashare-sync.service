@@ -1,0 +1,11 @@
+[Unit]
+Description=A-share research data sync (no trading)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ashare-lab
+EnvironmentFile=/etc/ashare-lab/sync.env
+ExecStart=/opt/ashare-lab/collector/.venv/bin/python collector/scheduled.py
+TimeoutStartSec=3600
+UMask=0077

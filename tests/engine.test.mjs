@@ -4,8 +4,8 @@ import {defaults,parseCSV,backtest,demoData,demoMinuteData,detectTimeframe,resam
 import {slots} from '../dist/data.mjs';
 const dailyMarket=(n=70)=>Array.from({length:n},(_,i)=>{const date=new Date(Date.UTC(2024,0,i+1)).toISOString().slice(0,10),p=10+i*.1;return {date,open:p,high:p+.1,low:p-.1,close:p,volume:100000,prev_close:i?p-.1:p,halted:0};});
 function minuteMarket(n=100){const result=[];let di=0,prev=10;for(let d=new Date('2024-01-01T00:00:00Z');di<n;d.setUTCDate(d.getUTCDate()+1)){if([0,6].includes(d.getUTCDay()))continue;const day=d.toISOString().slice(0,10);slots(5).forEach((time,bi)=>{const p=10+di*.04+bi*.0008;result.push({date:day+' '+time,open:p,high:p+.002,low:p-.002,close:p+.0004,volume:10000,prev_close:prev,halted:0});});prev=result.at(-1).close;di++;}return result;}
-const config=d=>({...defaults,strategy:'ma',timeframe:'1d',from:d[35].date,to:d.at(-1).date,fast:5,slow:10,stop:0,take:0,commission:0,minCommission:0,transfer:0,stamp:0,slippage:0,limit:0});
-const minuteConfig=d=>({...defaults,strategy:'ma',timeframe:'5m',from:d[48*2].date.slice(0,10),to:d.at(-1).date.slice(0,10),fast:2,slow:3,stop:0,take:0,commission:0,minCommission:0,transfer:0,stamp:0,slippage:0,limit:0});
+const config=d=>({...defaults,strategy:'ma',timeframe:'1d',taxMode:'manual',rulesMode:'manual',from:d[35].date,to:d.at(-1).date,fast:5,slow:10,stop:0,take:0,commission:0,minCommission:0,transfer:0,stamp:0,slippage:0,limit:0});
+const minuteConfig=d=>({...defaults,strategy:'ma',timeframe:'5m',taxMode:'manual',rulesMode:'manual',from:d[48*2].date.slice(0,10),to:d.at(-1).date.slice(0,10),fast:2,slow:3,stop:0,take:0,commission:0,minCommission:0,transfer:0,stamp:0,slippage:0,limit:0});
 
 test('all five strategies have deterministic finite results and preserve accounting',()=>{const d=demoData(),prices=new Map(d.map(r=>[r.date,r.close]));for(const strategy of['swing','ma','macd','rsi','boll']){const c={...defaults,strategy,timeframe:'1d'},r=backtest(d,c);assert.equal(r.curve.length,782);assert.ok(Number.isFinite(r.metrics.total));assert.ok(r.metrics.cash>=0);assert.equal(r.metrics.quantity%100,0);for(const p of r.curve)assert.ok(Math.abs(p.equity-(p.cash+p.quantity*prices.get(p.date)))<1e-7);assert.deepEqual(r,backtest(d,c));}});
 
@@ -30,7 +30,7 @@ test('5m aggregates only complete 15m candles, lunch break is not filled, daily 
 
 test('no fabricated finer resolution and native timeframe inference',()=>{const d=minuteMarket(2);assert.equal(detectTimeframe(d),'5m');assert.equal(detectTimeframe(resampleData(d,'15m')),'15m');assert.throws(()=>resampleData(dailyMarket(),'5m'),/无法/);assert.throws(()=>resampleData(resampleData(d,'15m'),'5m'),/无法/);});
 
-test('prefix-invariant multi-timeframe signals: future daily close never leaks into intraday trades',()=>{const d=minuteMarket(100),c={...minuteConfig(d),strategy:'swing',from:d[48*65].date.slice(0,10),timeframe:'15m'},full=backtest(d,c),cut=48*80+21,prefix=d.slice(0,cut),truncated=backtest(prefix,c),last=truncated.curve.at(-1).date;
+test('prefix-invariant multi-timeframe signals: future daily close never leaks into intraday trades',()=>{const d=minuteMarket(100),c={...minuteConfig(d),strategy:'swing',maxExtensionATR:10,from:d[48*65].date.slice(0,10),timeframe:'15m'},full=backtest(d,c),cut=48*80+21,prefix=d.slice(0,cut),truncated=backtest(prefix,c),last=truncated.curve.at(-1).date;
   assert.ok(full.trades.length>0);assert.deepEqual(truncated.curve,full.curve.filter(p=>p.date<=last));assert.deepEqual(truncated.trades,full.trades.filter(t=>t.executionTime<last));
   const changed=structuredClone(d);for(let i=cut;i<changed.length;i++){changed[i].close*=.7;changed[i].low=Math.min(changed[i].low,changed[i].close);changed[i].high*=1.3;}
   const r2=backtest(changed,c);assert.deepEqual(full.curve.filter(p=>p.date<=last),r2.curve.filter(p=>p.date<=last));assert.deepEqual(full.trades.filter(t=>t.executionTime<last),r2.trades.filter(t=>t.executionTime<last));
@@ -38,12 +38,12 @@ test('prefix-invariant multi-timeframe signals: future daily close never leaks i
   assert.equal(full.audit.timingViolations,0);
 });
 
-test('swing breakout excludes the signal day and can buy a fresh record high',()=>{const d=minuteMarket(90),c={...minuteConfig(d),strategy:'swing',from:d[48*65].date.slice(0,10)};const r=backtest(d,c);assert.ok(r.trades.some(t=>t.side==='买入'),'including the signal day in maximum would prevent every breakout');assert.equal(r.trades[0].dailySignalTime.slice(0,10),d[48*65-1].date.slice(0,10));});
+test('swing breakout excludes the signal day and can buy a fresh record high',()=>{const d=minuteMarket(90),c={...minuteConfig(d),strategy:'swing',maxExtensionATR:10,from:d[48*65].date.slice(0,10)};const r=backtest(d,c);assert.ok(r.trades.some(t=>t.side==='买入'),'including the signal day in maximum would prevent every breakout');assert.equal(r.trades[0].dailySignalTime.slice(0,10),d[48*65-1].date.slice(0,10));});
 
-test('large swing strategy ignores isolated minute down-crosses while daily trend remains valid',()=>{const d=minuteMarket(90),start=48*65,c={...minuteConfig(d),strategy:'swing',from:d[start].date.slice(0,10),atrMult:0};for(let i=start+10;i<start+14;i++){d[i].close*=.98;d[i].low=d[i].close;}
+test('large swing strategy ignores isolated minute down-crosses while daily trend remains valid',()=>{const d=minuteMarket(90),start=48*65,c={...minuteConfig(d),strategy:'swing',maxExtensionATR:10,from:d[start].date.slice(0,10),atrMult:0};for(let i=start+10;i<start+14;i++){d[i].close*=.98;d[i].low=d[i].close;}
   const r=backtest(d,c);assert.ok(r.trades.some(t=>t.side==='买入'));assert.equal(r.trades.filter(t=>t.side==='卖出').length,0);assert.ok(r.metrics.quantity>0);});
 
-test('training selection is invariant to changed validation prices',()=>{const d=minuteMarket(230),c={...minuteConfig(d),strategy:'swing',timeframe:'15m',from:d[48*125].date.slice(0,10)},comparison=compareParameters(d,c),changed=structuredClone(d);
+test('training selection is invariant to changed validation prices',()=>{const d=minuteMarket(230),c={...minuteConfig(d),strategy:'swing',maxExtensionATR:10,objective:'return',timeframe:'15m',from:d[48*125].date.slice(0,10)},comparison=compareParameters(d,c),changed=structuredClone(d);
   for(const r of changed)if(r.date.slice(0,10)>=comparison.validationFrom)for(const key of['open','high','low','close','prev_close'])r[key]*=.7;
   const second=compareParameters(changed,c);assert.equal(comparison.rows.length,9);assert.equal(comparison.selectionRule,'training_return_only');assert.deepEqual(comparison.rows.map(r=>[r.config.dailySlow,r.config.atrMult,r.training?.total]),second.rows.map(r=>[r.config.dailySlow,r.config.atrMult,r.training?.total]));assert.ok(comparison.trainTo<comparison.validationFrom);
 });
@@ -56,7 +56,7 @@ test('minute CSV accepts close timestamps and rejects lunch/start-time misalignm
 
 test('warmup is required in daily sessions for swings and in bars for other strategies',()=>{const d=dailyMarket();assert.throws(()=>backtest(d,{...config(d),from:d[1].date}),/预热/);assert.throws(()=>backtest(d,{...config(d),fast:20,slow:10}),/短期/);const m=minuteMarket(40);assert.throws(()=>backtest(m,{...minuteConfig(m),strategy:'swing',from:m[48*30].date.slice(0,10)}),/完整交易日预热/);});
 
-test('minute demo is deterministic, complete and works at both execution periods',()=>{const d=demoMinuteData();assert.deepEqual(d.slice(0,10),demoMinuteData().slice(0,10));for(const timeframe of['5m','15m']){const r=backtest(d,{...defaults,timeframe});assert.equal(r.period.tradingDays,782);assert.equal(r.warnings.length,0);assert.equal(r.audit.timingViolations,0);assert.ok(r.trades.length>0);}});
+test('minute demo is deterministic, complete and works at both execution periods',()=>{const d=demoMinuteData();assert.deepEqual(d.slice(0,10),demoMinuteData().slice(0,10));for(const timeframe of['5m','15m']){const r=backtest(d,{...defaults,dataMode:'demo',timeframe});assert.equal(r.period.tradingDays,782);assert.equal(r.warnings.length,0);assert.equal(r.audit.timingViolations,0);assert.ok(r.trades.length>0);}});
 
 
 test('15m aggregation preserves halt known at bucket open rather than future resume state',()=>{const d=minuteMarket(5),start=48*2;d[start].halted=1;d[start].volume=0;const bars=resampleData(d,'15m');assert.equal(bars[16*2].halted,1);assert.ok(bars[16*2].volume>0);const r=backtest(d,{...minuteConfig(d),timeframe:'15m'});assert.equal(r.trades[0].executionTime,d[start].date.slice(0,10)+' 09:45');assert.equal(r.metrics.blocked,1);});
