@@ -1,7 +1,7 @@
 import http from 'node:http';
 import {readFile,writeFile,rename,mkdir,readdir,stat,realpath} from 'node:fs/promises';
 import path from 'node:path';
-import {fileURLToPath} from 'node:url';
+import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createHash,randomUUID} from 'node:crypto';
 import {Readable} from 'node:stream';
 import {ResearchManager} from '../server/research.mjs';
@@ -32,8 +32,21 @@ export function fileAssets(root){const base=path.resolve(root);return {async fet
   }catch(e){return new Response(e.code==='ENOENT'?'Not Found':'Invalid path',{status:e.code==='ENOENT'?404:400});}
 }};}
 function readBody(req){return new Promise((resolve,reject)=>{let size=0,chunks=[];const onData=chunk=>{size+=chunk.length;if(size>25*1024*1024){chunks=[];req.off('data',onData);req.resume();reject(Object.assign(Error('数据包超过 25 MB'),{status:413}));}else chunks.push(chunk);};req.on('data',onData);req.once('end',()=>resolve(Buffer.concat(chunks)));req.once('error',reject);});}
+export async function loadBuiltWorker(root=projectRoot){
+  const entry=path.join(root,'dist/server/index.js');
+  try{await stat(entry);}catch(e){
+    if(e.code==='ENOENT')throw Object.assign(Error('缺少构建文件：'+entry+'。请解压完整部署包，或先运行 npm ci 和 npm run build。'),{code:'BUILD_MISSING'});
+    throw Object.assign(Error('无法访问后台构建文件：'+entry+'（'+e.code+'）'),{code:'BUILD_ACCESS_FAILED',cause:e});
+  }
+  let worker;
+  try{worker=(await import(pathToFileURL(entry).href)).default;}catch(e){
+    throw Object.assign(Error('后台构建文件加载失败：'+entry+'。原因：'+(e.code??e.name)+'：'+e.message),{code:'BUILD_LOAD_FAILED',cause:e});
+  }
+  if(typeof worker?.fetch!=='function')throw Object.assign(Error('后台构建文件入口无效：'+entry+'；需要导出可调用的 fetch。'),{code:'BUILD_ENTRY_INVALID'});
+  return worker;
+}
 export async function startLocal({port=8080,dataDir=path.join(projectRoot,'.local-data'),assetsDir=path.join(projectRoot,'dist/client'),worker,researchOptions={}}={}){
-  if(!worker){try{worker=(await import(path.join(projectRoot,'dist/server/index.js'))).default;}catch{throw Error('缺少构建文件。请用完整部署包，或先运行 npm ci 和 npm run build。');}}
+  if(!worker)worker=await loadBuiltWorker();
   await mkdir(dataDir,{recursive:true});const env={BUCKET:new FileBucket(path.join(dataDir,'warehouse')),ASSETS:fileAssets(assetsDir)};
   const research=await new ResearchManager({...researchOptions,root:path.join(dataDir,'research'),bucket:env.BUCKET}).init();
   const server=http.createServer(async(req,res)=>{

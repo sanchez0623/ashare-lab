@@ -16,6 +16,8 @@
 
 端口占用时：`node scripts/local-server.mjs --port 8081`，然后访问 http://127.0.0.1:8081。
 
+旧版 Windows 启动时可能把模块加载失败误报为“缺少构建文件”，即使 `dist/server/index.js` 已存在。当前版已改用文件URL加载并保留实际错误原因。升级时将新包中的 `scripts/local-server.mjs` 覆盖到旧项目同名文件，再双击 `start-local.cmd`；保留旧项目的 `.local-data` 和 `collector/.venv`。如果新提示确实为缺少文件，检查是否完整解压到包含 `dist` 与 `scripts` 的同一目录。
+
 服务只监听本机127.0.0.1，不提供局域网共享或公网登录。不要把它直接通过隧道、反向代理公开；多人服务需要另做鉴权。Windows / macOS 启动脚本已提供；本次实际启动与浏览器验收在 Linux / Node.js 24 上完成。
 
 ## 2. 安装 Python 采集环境

@@ -1,30 +1,47 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,writeFile,mkdir} from 'node:fs/promises';
+import {mkdtemp,rm,writeFile,mkdir,copyFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import http from 'node:http';
-import {startLocal,FileBucket} from '../scripts/local-server.mjs';
+import {startLocal,FileBucket,loadBuiltWorker} from '../scripts/local-server.mjs';
 import worker from '../server/worker.mjs';
 import {fixture} from './fixture.mjs';
 
 test('local deployment serves UI and persists exact warehouse snapshots across restart',async()=>{
  const dir=await mkdtemp(path.join(tmpdir(),'ashare-local-'));let server;
  try{
-  server=await startLocal({port:0,dataDir:dir,worker});let url='http://127.0.0.1:'+server.address().port;
+  server=await startLocal({port:0,dataDir:dir});let url='http://127.0.0.1:'+server.address().port;
   const page=await fetch(url);assert.equal(page.status,200);assert.match(await page.text(),/波段策略回测/);
   const raw=JSON.stringify(fixture()),id=createHash('sha256').update(raw).digest('hex');
   let r=await fetch(url+'/api/data/ingest',{method:'POST',headers:{'content-type':'application/json'},body:raw});assert.equal(r.status,201);const manifest=await r.json();assert.equal(manifest.id,id);assert.equal(manifest.report.status,'passed');
   const read=await fetch(url+'/api/data/bundle?id='+id);assert.equal(await read.text(),raw);
   r=await fetch(url+'/api/data/ingest',{method:'POST',headers:{'content-type':'application/json'},body:raw});assert.equal((await r.json()).reused,true);
-  await new Promise(resolve=>server.close(resolve));server=await startLocal({port:0,dataDir:dir,worker});url='http://127.0.0.1:'+server.address().port;
+  await new Promise(resolve=>server.close(resolve));server=await startLocal({port:0,dataDir:dir});url='http://127.0.0.1:'+server.address().port;
   const catalog=await(await fetch(url+'/api/data/catalog')).json();assert.equal(catalog.entries[0].id,id);assert.equal(await(await fetch(url+'/api/data/bundle?id='+id)).text(),raw);
   const forbidden=await fetch(url+'/api/data/ingest',{method:'POST',headers:{'content-type':'application/json',origin:'https://example.com'},body:raw});assert.equal(forbidden.status,403);
   const hostStatus=await new Promise((resolve,reject)=>{const req=http.get(url,{headers:{Host:'attacker.example'}},res=>{res.resume();resolve(res.statusCode);});req.on('error',reject);});assert.equal(hostStatus,403);
   assert.equal((await fetch(url+'/%2e%2e%2fpackage.json')).status,403);
   assert.equal((await fetch(url+'/api/data/ingest',{method:'POST',headers:{'content-type':'application/json'},body:'x'.repeat(25*1024*1024+1)})).status,413);
  }finally{if(server)await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}
+});
+test('built runtime imports from a path with spaces, Chinese characters and URL delimiters',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'ashare-import-'));const root=path.join(dir,'研究系统 #预算 % 文件');
+ try{
+  await mkdir(path.join(root,'dist/server'),{recursive:true});await writeFile(path.join(root,'package.json'),'{"type":"module"}');
+  await copyFile(new URL('../dist/server/index.js',import.meta.url),path.join(root,'dist/server/index.js'));
+  const built=await loadBuiltWorker(root);const response=await built.fetch(new Request('http://localhost/'),{ASSETS:{fetch:async()=>new Response('packaged runtime')}});
+  assert.equal(await response.text(),'packaged runtime');
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+test('missing build and failed module import have different actionable diagnostics',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'ashare-build-diagnostic-'));
+ try{
+  await assert.rejects(loadBuiltWorker(dir),e=>e.code==='BUILD_MISSING'&&e.message.includes(path.join(dir,'dist/server/index.js')));
+  await mkdir(path.join(dir,'dist/server'),{recursive:true});await writeFile(path.join(dir,'package.json'),'{"type":"module"}');await writeFile(path.join(dir,'dist/server/index.js'),'export default { broken syntax');
+  await assert.rejects(loadBuiltWorker(dir),e=>e.code==='BUILD_LOAD_FAILED'&&e.cause instanceof SyntaxError&&!e.message.includes('缺少构建文件'));
+ }finally{await rm(dir,{recursive:true,force:true});}
 });
 test('file warehouse paginates stable keys and rejects arbitrary paths',async()=>{
  const dir=await mkdtemp(path.join(tmpdir(),'ashare-bucket-'));try{const b=new FileBucket(dir),ids=Array.from({length:103},(_,i)=>i.toString(16).padStart(64,'0'));
