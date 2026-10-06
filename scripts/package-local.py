@@ -15,6 +15,9 @@ for name in ['README.md','LOCAL_DEPLOY.md','package.json','package-lock.json','w
 for folder in ['dist','server','scripts','tests','collector']:
  for p in (root/folder).rglob('*'):
   if not p.is_file():continue
+  # A downloadable deployment bundle must never contain itself or an older
+  # generated bundle, including when packaging to a different output path.
+  if p.name=='ashare-lab-local.zip':continue
   relative=p.relative_to(root).as_posix()
   if any(x in p.parts for x in ['node_modules','__pycache__','.venv','store','raw','output','universe-cache']):continue
   if p.suffix not in ['.mjs','.js','.cjs','.css','.html','.json','.py','.md','.txt','.service','.timer','.zip']:continue

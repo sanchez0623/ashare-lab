@@ -4,6 +4,8 @@
 
 ## 1. 安装并启动网页
 
+在已发布网站的“行情数据”页点击“下载完整本地部署包”，保存 `ashare-lab-local.zip`。也可访问网站根地址下的 `/ashare-lab-local.zip`，需要登录拥有该私有网站的账号。包内 `LOCAL_DEPLOY.md` 是这份说明；Python环境、行情仓库和网站密钥不随包下载。
+
 安装 [Node.js 24 LTS](https://nodejs.org/en/download)（最低22），解压到有写权限的文件夹，例如 `D:\ashare-lab-local` 或用户文档目录。安装 Node 后重新打开终端。
 
 - Windows：双击 `start-local.cmd`，保持打开启动窗口。

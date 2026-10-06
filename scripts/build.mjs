@@ -9,3 +9,4 @@ with zipfile.ZipFile('dist/client/collector-kit.zip','w',zipfile.ZIP_DEFLATED) a
  for p in pathlib.Path('collector').glob('*'):
   if p.is_file() and p.suffix in ('.py','.md','.txt','.json','.service','.timer'):z.write(p,str(p))
 `]);
+execFileSync('python3',['scripts/package-local.py','dist/client/ashare-lab-local.zip'],{stdio:'inherit'});

@@ -130,3 +130,6 @@ async function refreshSources(){
 }
 $('#sources-refresh').onclick=()=>refreshSources();refreshSources();
 $('#lixinger-probe').onclick=async()=>{const button=$('#lixinger-probe');button.disabled=true;try{const v=await api('/api/sources/lixinger/probe',{method:'POST'});await refreshSources();toast(v.ok?'理杏仁日线验证通过'+(v.cached?'（缓存）':''):'理杏仁验证未通过：'+v.code);}catch(e){toast(e.message);}finally{button.disabled=false;}};
+
+// The extracted local bundle omits the downloadable archive to avoid nesting.
+$('#local-package-download').hidden=['localhost','127.0.0.1'].includes(location.hostname);
