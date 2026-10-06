@@ -8,6 +8,9 @@ import http from 'node:http';
 import {startLocal,FileBucket,loadBuiltWorker} from '../scripts/local-server.mjs';
 import worker from '../server/worker.mjs';
 import {fixture} from './fixture.mjs';
+// Drain response bodies even when only the status matters: a larger UI page
+// can otherwise leave an active client stream after the HTTP server closes.
+async function fetchStatus(url,options){const response=await fetch(url,options);await response.arrayBuffer();return response.status;}
 
 test('local deployment serves UI and persists exact warehouse snapshots across restart',async()=>{
  const dir=await mkdtemp(path.join(tmpdir(),'ashare-local-'));let server;
@@ -20,10 +23,10 @@ test('local deployment serves UI and persists exact warehouse snapshots across r
   r=await fetch(url+'/api/data/ingest',{method:'POST',headers:{'content-type':'application/json'},body:raw});assert.equal((await r.json()).reused,true);
   await new Promise(resolve=>server.close(resolve));server=await startLocal({port:0,dataDir:dir});url='http://127.0.0.1:'+server.address().port;
   const catalog=await(await fetch(url+'/api/data/catalog')).json();assert.equal(catalog.entries[0].id,id);assert.equal(await(await fetch(url+'/api/data/bundle?id='+id)).text(),raw);
-  const forbidden=await fetch(url+'/api/data/ingest',{method:'POST',headers:{'content-type':'application/json',origin:'https://example.com'},body:raw});assert.equal(forbidden.status,403);
+  assert.equal(await fetchStatus(url+'/api/data/ingest',{method:'POST',headers:{'content-type':'application/json',origin:'https://example.com'},body:raw}),403);
   const hostStatus=await new Promise((resolve,reject)=>{const req=http.get(url,{headers:{Host:'attacker.example'}},res=>{res.resume();resolve(res.statusCode);});req.on('error',reject);});assert.equal(hostStatus,403);
-  assert.equal((await fetch(url+'/%2e%2e%2fpackage.json')).status,403);
-  assert.equal((await fetch(url+'/api/data/ingest',{method:'POST',headers:{'content-type':'application/json'},body:'x'.repeat(25*1024*1024+1)})).status,413);
+  assert.equal(await fetchStatus(url+'/%2e%2e%2fpackage.json'),403);
+  assert.equal(await fetchStatus(url+'/api/data/ingest',{method:'POST',headers:{'content-type':'application/json'},body:'x'.repeat(25*1024*1024+1)}),413);
  }finally{if(server)await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}
 });
 test('built runtime imports from a path with spaces, Chinese characters and URL delimiters',async()=>{
@@ -59,7 +62,7 @@ test('source readiness API caches configuration checks without requiring source 
 test('missing Python does not stop local UI or turn a real task into demo success',async()=>{
  const dir=await mkdtemp(path.join(tmpdir(),'ashare-no-python-')),previous=process.env.ASHARE_PYTHON;let server;
  try{process.env.ASHARE_PYTHON=path.join(dir,'missing-python');server=await startLocal({port:0,dataDir:dir,worker});const url='http://127.0.0.1:'+server.address().port;
-  assert.equal((await fetch(url)).status,200);const readiness=await(await fetch(url+'/api/research/sources')).json();assert.equal(readiness.code,'PYTHON_MISSING');assert.deepEqual(readiness.sources,[]);
-  const j=await server.research.create({symbol:'600519',to:'2025-09-30',config:{timeframe:'5m'}});for(let i=0;i<100&&['queued','running'].includes(server.research.jobs.get(j.id).status);i++)await new Promise(r=>setTimeout(r,10));const task=server.research.jobs.get(j.id);assert.equal(task.status,'blocked');assert.equal(task.error.code,'PYTHON_MISSING');assert.equal(task.snapshotId,undefined);assert.equal((await fetch(url)).status,200);
+  assert.equal(await fetchStatus(url),200);const readiness=await(await fetch(url+'/api/research/sources')).json();assert.equal(readiness.code,'PYTHON_MISSING');assert.deepEqual(readiness.sources,[]);
+  const j=await server.research.create({symbol:'600519',to:'2025-09-30',config:{timeframe:'5m'}});for(let i=0;i<100&&['queued','running'].includes(server.research.jobs.get(j.id).status);i++)await new Promise(r=>setTimeout(r,10));const task=server.research.jobs.get(j.id);assert.equal(task.status,'blocked');assert.equal(task.error.code,'PYTHON_MISSING');assert.equal(task.snapshotId,undefined);assert.equal(await fetchStatus(url),200);
  }finally{if(previous===undefined)delete process.env.ASHARE_PYTHON;else process.env.ASHARE_PYTHON=previous;if(server)await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
 });
