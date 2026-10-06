@@ -80,6 +80,9 @@ def baostock(symbol,board,tf,start,end,history_start=None):
         dividends=[]
         for year in range(int(history_start[:4])-1,int(end[:4])+1):dividends+=bs_rows(bs.query_dividend_data(code,year=str(year),yearType='operate'))
     finally:pass
+    return normalize_baostock(symbol,history_start,end,basic,cal,daily_raw,minute_raw,fac,dividends)
+
+def normalize_baostock(symbol,history_start,end,basic,cal,daily_raw,minute_raw,fac,dividends):
     daily=[];factor=1;prev=None
     for r in daily_raw:
         price=number(r['close']);ref=number(r['preclose']);halted=0 if r['tradestatus']=='1' else 1
@@ -94,8 +97,8 @@ def baostock(symbol,board,tf,start,end,history_start=None):
     actions=[]
     for i,r in enumerate(dividends):
         ex=r.get('dividOperateDate','');cash=number(r.get('dividCashPsBeforeTax'),0);bonus=number(r.get('dividStocksPs'),0)+number(r.get('dividReserveToStockPs'),0)
-        if not ex or not (cash or bonus):continue
-        actions.append({'id':f'{symbol}-{ex}-{i}','type':'dividend','announcementTime':r.get('dividPlanDate','')+' 00:00','recordDate':r.get('dividRegistDate'),'exDate':ex,'payDate':r.get('dividPayDate'),'shareListDate':r.get('dividStockMarketDate'),'cashPerShare':cash,'bonusPerShare':bonus,'cashBasis':'gross','referencePrice':dm.get(ex,{}).get('prev_close')})
+        if not ex or not history_start<=ex<=end or not (cash or bonus):continue
+        actions.append({'id':f'{symbol}-{ex}-{i}','type':'dividend','announcementTime':(r.get('dividPlanDate') or r.get('dividPlanAnnounceDate') or '')+' 00:00','recordDate':r.get('dividRegistDate'),'exDate':ex,'payDate':r.get('dividPayDate'),'shareListDate':r.get('dividStockMarketDate'),'cashPerShare':cash,'bonusPerShare':bonus,'cashBasis':'gross','referencePrice':dm.get(ex,{}).get('prev_close')})
     cov={k:{'status':'complete','from':history_start,'to':end,'source':'baostock'} for k in ('calendar','daily','factors')}
     # Coverage is subject to independent reconciliation: every factor/ex-reference
     # change must map to a fully specified cash/bonus event and its economics.

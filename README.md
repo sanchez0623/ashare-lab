@@ -1,10 +1,10 @@
 # 青衡 · 沪深300波段研究台 v4
 
-不对接交易。历史沪深300成分准入、日线大波段、真实5/15分钟执行、历史ST过滤、公司行动账本与持久数据快照。当前真实BaoStock回填未运行：托管环境未授权SDK的TCP连接，须在自有联网主机采集；无需API Key/Token。免费分钟连通性样例为600519，只能证明接口近期可用，资料不完整，不可正式回测。
+不对接交易。历史沪深300成分准入、日线大波段、真实5/15分钟执行、历史ST过滤、公司行动账本与持久数据快照。单股一年5分钟自动验收流程已实现。已提交真实600519任务，但采集被当前环境的SDK TCP策略阻断，尚未通过真实数据验收；在自有可联网主机运行，无需API Key/Token。免费分钟连通性样例为600519，只能证明接口近期可用，资料不完整，不可正式回测。
 
 ## 本地部署
 
-完整离线启动包与本地部署流程见 [LOCAL_DEPLOY.md](LOCAL_DEPLOY.md)。安装Node.js 22+即可 `npm start`，默认只监听127.0.0.1，使用 `.local-data/warehouse/` 持久文件仓库，无需云账号。已构建包不必先安装开发依赖。Windows另有 `start-local.cmd`，macOS/Linux有 `start-local.sh`。Python采集器文件锁支持Windows和POSIX，`collector/upload_local.py`可向本机入库，不用Site Token。
+完整离线启动包与本地部署流程见 [LOCAL_DEPLOY.md](LOCAL_DEPLOY.md)。安装Node.js 22+即可 `npm start`，默认只监听127.0.0.1，使用 `.local-data/warehouse/` 持久文件仓库，无需云账号。已构建包不必先安装开发依赖。Windows另有 `start-local.cmd`，macOS/Linux有 `start-local.sh`。Python采集器文件锁支持Windows和POSIX。安装采集依赖后，网页“行情数据 → 单股一年数据验收”可自动分月采集、校验、入库、后台回测、双跑核对并保存报告。六类行情另存内容寻址Parquet并读回验证；原始响应保留审计。任务持久保存于 `.local-data/research/`；暂停/异常中断可恢复。固定快照复现不重新请求供应商。`collector/upload_local.py`仍可手工向本机入库，不用Site Token。
 
 ## 使用
 
@@ -15,7 +15,7 @@ npm ci
 npm run build
 npm run dev -- --port 8080
 npm test
-python tests/collector_test.py
+python -m unittest discover -s tests -p "*collector_test.py" -v
 ```
 
 浏览器中的Web Worker计算；云Worker提供私有数据仓库API。构建输出 `dist/server/index.js` 和 `dist/client/`，部署清单 `.openai/hosting.json` 沿用原Site，R2绑定BUCKET。历史研究记录明确为本机20次摘要，行情快照为服务器持久存储。
@@ -61,6 +61,6 @@ python tests/collector_test.py
 
 `GET /api/data/catalog`（游标分页），`GET /api/data/bundle?id=<SHA256>`，`POST /api/data/ingest`。服务器限25MB/120000根，重新审计；先持久化完整原始快照，再发布不可变清单，重复相同字节按哈希幂等。源重叠修订在采集端隔离，不静默覆盖。
 
-本站保持所有者私有，平台在Worker前鉴权；后台写入使用只发送给同一Site的OAI-Sites-Authorization服务凭据。无交易API。未启用后台任务；附systemd定时器可在自有主机按北京时间16:30串行运行，需实际部署和验收，详见采集器说明。
+本站保持所有者私有，平台在Worker前鉴权；后台写入使用只发送给同一Site的OAI-Sites-Authorization服务凭据。无交易API。本地版已接入持久后台单股验收任务，API和部署步骤见LOCAL_DEPLOY.md；未启用定时增量任务。附systemd定时器可在自有主机按北京时间16:30串行运行，需实际部署和验收，详见采集器说明。
 
 JSON报告保存对应行情、策略、成交/日线信号时间、净值、公司行动账本与质量审计；参数或标的切换而未回测时，导出仍对应上次已完成结果。

@@ -24,7 +24,7 @@ if samples:
   for p in samples.glob(pattern):
    if p.suffix in ['.csv','.json']:files['data/samples/'+p.name]=p.read_bytes()
  files['data/samples/README.md']='''# 真实行情样例\n\n日线：2025-10-09至2026-09-30，241根，新浪与腾讯收盘交叉核验。\n原生15分钟：2026-04-02至2026-09-30，1970根。\n5分钟：2026-08-03至2026-09-30，1970根。\n\n来源：AkShare适配接口及相同新浪官方报价端点。均为原始价。CSV可显式选择CSV探索；JSON保留缺少历史ST、公司行动和历史成分资料的状态，不能正式回测。与合成演示分开，不代表完整一年分钟数据。资料请求范围、原始哈希及同步时间见JSON metadata。\n'''.encode()
-manifest={'createdAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'runtime':'Node.js >=22; Python >=3.10 for collectors only','startup':'node scripts/local-server.mjs','storage':'.local-data/warehouse','cloudCredentialsIncluded':False,'files':{name:hashlib.sha256(body).hexdigest() for name,body in sorted(files.items())}}
+manifest={'createdAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'runtime':'Node.js >=22; Python >=3.10 with collector dependencies for automatic collection','startup':'node scripts/local-server.mjs','storage':'.local-data/warehouse and .local-data/research','cloudCredentialsIncluded':False,'files':{name:hashlib.sha256(body).hexdigest() for name,body in sorted(files.items())}}
 files['LOCAL_PACKAGE_MANIFEST.json']=json.dumps(manifest,ensure_ascii=False,indent=2).encode()
 out.parent.mkdir(parents=True,exist_ok=True)
 with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED) as z:

@@ -15,3 +15,5 @@ collector/output/
 collector/store/
 collector/universe-cache/
 *.zip
+
+__pycache__/
