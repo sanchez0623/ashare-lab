@@ -23,14 +23,19 @@ export function normalizeRequest(input){
   if(!date(input.to))throw failure('REQUEST','请选择有效的研究结束日期');
   const today=new Date(Date.now()+8*3600000).toISOString().slice(0,10);
   if(input.to>=today)throw failure('REQUEST','研究结束日期必须早于北京时间今天，避免采集未完成交易日');
-  const from=yearStart(input.to);if(input.from&&input.from!==from)throw failure('REQUEST','验收区间固定为完整一个日历年');
+  const rangeMode=input.rangeMode??(input.from===undefined?'year':'custom');
+  if(!['year','custom'].includes(rangeMode))throw failure('REQUEST','研究区间模式须为year或custom');
+  const from=rangeMode==='year'?yearStart(input.to):input.from;
+  if(!date(from))throw failure('REQUEST','请选择有效的研究开始日期');
+  if(from>=input.to)throw failure('REQUEST','研究开始日期必须早于结束日期');
+  if(rangeMode==='year'&&input.from!==undefined&&input.from!==from)throw failure('REQUEST','一年模式的开始日期由结束日期自动计算；自定义日期请使用custom模式');
   const cfg=Object.fromEntries(Object.keys(defaults).map(k=>[k,input.config?.[k]??defaults[k]]));
   Object.assign(cfg,{from,to:input.to,board,dataMode:'formal',rulesMode:'historical'});
   if(!['5m','15m'].includes(cfg.timeframe))throw failure('REQUEST','验收需在5或15分钟执行，原始采集均为5分钟');
   validate(cfg);
   const warmupSessions=Math.max(60,cfg.dailySlow,cfg.breakout+1,cfg.exitPeriod,cfg.atrPeriod,cfg.confirmationDays+1,Math.ceil(Math.max(cfg.slow,35,cfg.rsiPeriod+1,cfg.bbPeriod)/(cfg.timeframe==='5m'?48:16))+1);
   const budget=input.budget??10000;if(!Number.isInteger(budget)||budget<1||budget>40000)throw failure('REQUEST','日预算须为1至40000，默认10000');
-  return {schemaVersion:1,symbol,board,from,to:input.to,warmupSessions,budget,provider:'baostock',config:cfg};
+  return {schemaVersion:1,symbol,board,rangeMode,from,to:input.to,warmupSessions,budget,provider:'baostock',config:cfg};
 }
 export function acceptanceAudit(bundle,request){
   const quality=auditBundle(bundle),issues=[...quality.issues],add=(code,message)=>issues.push({code,message,count:1,samples:[]});
@@ -38,12 +43,13 @@ export function acceptanceAudit(bundle,request){
   if(m.symbol!==request.symbol||m.board!==request.board)add('IDENTITY','数据包证券或板块不符');
   if(m.timeframe!=='5m')add('NATIVE_5M','验收必须使用原生5分钟，禁止拆分日线或15分钟');
   if(m.requested?.to!==request.to||m.requested?.from>=request.from)add('RESEARCH_RANGE','数据包须完整覆盖研究区间和独立预热区间');
+  if(m.research&&(m.research.from!==request.from||m.research.to!==request.to||m.research.warmupSessions!==request.warmupSessions))add('RESEARCH_RANGE','采集回执的研究区间或预热要求与固定请求不一致');
   if(!m.synthetic&&(m.source!=='baostock'||!Object.keys(m.provenance?.queries??{}).length))add('PROVENANCE','缺少BaoStock原始查询检查点证明');
   if(!m.synthetic&&['bars','daily','calendar','universe','actions','factors'].some(k=>!m.parquetArchive?.tables?.[k]))add('PARQUET_ARCHIVE','缺少完整本地Parquet归档回执');
   const warm=(bundle.calendar??[]).filter(d=>d>=m.requested?.from&&d<request.from&&d>=m.listedDate);
   if(warm.length<request.warmupSessions)add('WARMUP','完整预热交易日不足：需要'+request.warmupSessions+'日');
   const code=(request.symbol.startsWith('6')?'sh.':'sz.')+request.symbol;
-  if(!(bundle.universe??[]).some(u=>u.date>=request.from&&u.date<=request.to&&u.codes?.includes(code)))add('HISTORICAL_MEMBER','研究年内未证明曾为沪深300成分股');
+  if(!(bundle.universe??[]).some(u=>u.date>=request.from&&u.date<=request.to&&u.codes?.includes(code)))add('HISTORICAL_MEMBER','研究区间内未证明曾为沪深300成分股');
   if(!rows.some(r=>r.date.slice(0,10)>=request.from&&r.date.slice(0,10)<=request.to))add('RESEARCH_EMPTY','研究区间无分钟数据');
   return {...quality,status:issues.length?'blocked':'passed',issues,warmupSessions:warm.length,requiredWarmup:request.warmupSessions,research:{from:request.from,to:request.to},synthetic:m.synthetic===true};
 }
@@ -110,7 +116,9 @@ export class ResearchManager {
     await this.stage(job,'preflight','检查固定输入和引擎版本');
     if(hash(await readFile(this.location(job.id,'request.json')))!==job.requestHash)throw failure('REQUEST_HASH','任务参数文件发生变化');
     if(job.engineHash!==await engineHash())throw failure('ENGINE_CHANGED','引擎代码已改变。旧任务不能用新引擎静默恢复，请创建新任务');
-    if(job.pipelineHash!==await pipelineHash())throw failure('PIPELINE_CHANGED','采集或验收代码已改变，不能与旧断点混用，请创建新任务');
+    // An immutable snapshot needs no collection checkpoints. Keep its original
+    // provenance while still checking the request, snapshot and engine hashes.
+    if(!job.snapshotId&&job.pipelineHash!==await pipelineHash())throw failure('PIPELINE_CHANGED','采集或验收代码已改变，不能与旧断点混用，请创建新任务');
     const cfg=job.request.config,collection=this.location(job.id,'collection');let bundle,bytes;
     if(job.snapshotId){const object=await this.bucket.get('snapshots/'+job.snapshotId+'.json');if(!object)throw failure('SNAPSHOT_MISSING','固定行情快照不存在');bytes=Buffer.from(object.body);if(hash(bytes)!==job.snapshotId)throw failure('SNAPSHOT_HASH','固定行情快照哈希不一致');bundle=JSON.parse(bytes);}
     else {
@@ -132,7 +140,7 @@ export class ResearchManager {
     await this.stage(job,'verify','使用同一快照和参数独立重跑，并核对资产及费用');const second=await this.runEngine(job,snapshot,runConfig);const firstHash=hash(canonical(first)),secondHash=hash(canonical(second));
     if(firstHash!==secondHash||job.expectedResultHash&&firstHash!==job.expectedResultHash)throw failure('REPRODUCIBILITY','相同输入得到不同结果，验收失败');
     const accounting=auditAccounting(first,bundle);job.resultHash=firstHash;job.acceptance=bundle.metadata.synthetic?'synthetic-test-only':'passed';
-    const report={schemaVersion:1,acceptance:job.acceptance,input:{requestHash:job.requestHash,configHash:job.configHash,engineHash:job.engineHash,pipelineHash:job.pipelineHash,snapshotId:id,runtime:{node:process.versions.node}},request:job.request,quality:job.quality,reproducibility:{status:'passed',runs:2,resultHash:firstHash,repeatedHash:secondHash},accounting,result:first,limitations:['历史沪深300成员按BaoStock周度快照；不证明交易所逐事件历史可得性','公司行动资料不完整或遇到未支持的配股时阻止正式回测','单标的年度样本不保证盈利；未平仓和未配对T均保留在报告']};
+    const report={schemaVersion:1,acceptance:job.acceptance,input:{requestHash:job.requestHash,configHash:job.configHash,engineHash:job.engineHash,pipelineHash:job.pipelineHash,snapshotId:id,runtime:{node:process.versions.node}},request:job.request,quality:job.quality,reproducibility:{status:'passed',runs:2,resultHash:firstHash,repeatedHash:secondHash},accounting,result:first,limitations:['历史沪深300成员按BaoStock周度快照；不证明交易所逐事件历史可得性','公司行动资料不完整或遇到未支持的配股时阻止正式回测','单标的历史样本不保证盈利；未平仓和未配对T均保留在报告']};
     await this.stage(job,'report','保存完整报告、交易明细与净值曲线');await this.saveReport(job,report);job.metrics=first.metrics;job.status='completed';job.stage='completed';delete job.error;await this.save(job,job.acceptance==='passed'?'真实数据流程验收通过（不代表策略盈利）':'合成夹具流程测试完成，不属于真实数据验收');
   }
   async saveReport(job,report){const bytes=canonical(report),id=hash(bytes);await atomic(path.join(this.root,'reports',id+'.json'),bytes);job.reportHash=id;await this.save(job);}

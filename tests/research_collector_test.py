@@ -68,6 +68,22 @@ class ResearchCollectorTests(unittest.TestCase):
             daily=pathlib.Path(root)/first['tables']['daily']['path'];rows=pq.read_table(daily).to_pylist();self.assertEqual(rows[1]['specialSession'],1);self.assertIsNone(rows[0]['specialSession']);self.assertEqual(rows[0]['causalFactor'],1)
             p=pathlib.Path(root)/first['tables']['bars']['path'];p.write_bytes(b'corrupt')
             with self.assertRaisesRegex(RuntimeError,'哈希'):archive(bundle,root)
+    def test_custom_short_and_multiyear_collect_exact_bounds_and_separate_warmup(self):
+        # SDK transport fixtures exercise the real month/checkpoint/archive
+        # flow; their one-bar days do not qualify as formal market data.
+        for start,end in [('2024-05-15','2024-06-04'),('2024-05-01','2026-09-30')]:
+            with self.subTest(start=start,end=end),tempfile.TemporaryDirectory() as root:
+                request={'symbol':'600519','board':'main','rangeMode':'custom','from':start,'to':end,'warmupSessions':60}
+                bs=FakeSDK();bs.fail=False;base=pathlib.Path(root)
+                bundle=collect(request,base/'job',base/'market',bs=bs)
+                metadata=bundle['metadata'];warm=bs.days('2024-01-02',start)[:-1] if dt.date.fromisoformat(start).weekday()<5 else bs.days('2024-01-02',start)
+                self.assertEqual(metadata['requested'],{'from':warm[-60],'to':end})
+                self.assertEqual(metadata['research'],{'from':start,'to':end,'warmupSessions':60})
+                proofs=metadata['provenance']['queries'].values();queries=[p['query'] for p in proofs if p['query'][0]=='minute']
+                self.assertEqual([(q[3],q[4]) for q in queries],list(months(warm[-60],end)))
+                self.assertEqual(min(b['date'][:10] for b in bundle['bars']),warm[-60]);self.assertEqual(max(b['date'][:10] for b in bundle['bars']),end)
+                before=(base/'job/bundle.json').read_bytes();count=len(bs.calls);collect(request,base/'job',base/'market',bs=bs)
+                self.assertEqual(len(bs.calls),count);self.assertEqual((base/'job/bundle.json').read_bytes(),before)
     def test_pause_and_network_block_do_not_open_a_socket(self):
         with patch('research_collect.pathlib.Path.exists',return_value=True),patch('research_collect.pathlib.Path.read_text',return_value='{"tcp_network_access":{"domains":[],"ip_ranges":[]}}'):
             with self.assertRaises(Blocked) as e:network_check()

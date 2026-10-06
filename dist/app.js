@@ -115,7 +115,18 @@ async function refreshResearch(){
     if(v.jobs.some(j=>['queued','running'].includes(j.status)))researchTimer=setTimeout(refreshResearch,3000);
   }catch(e){$('#research-status').textContent=e.message;}
 }
-$('#research-form').onsubmit=async e=>{e.preventDefault();const button=$('#research-submit');button.disabled=true;try{await api('/api/research/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:$('#research-symbol').value,to:$('#research-end').value,config:{...config(),timeframe:$('#research-period').value}})});toast('任务已保存并提交后台。');await refreshResearch();}catch(e){toast(e.message);}finally{button.disabled=false;}};
+function updateResearchRange(){
+  const mode=$('#research-range').value,start=$('#research-start'),end=$('#research-end');
+  const yesterday=new Date(Date.now()+8*3600000-86400000).toISOString().slice(0,10);
+  start.readOnly=mode==='year';start.max=end.value||yesterday;end.max=yesterday;
+  if(mode==='year'&&end.value){const d=new Date(end.value+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);d.setUTCFullYear(d.getUTCFullYear()-1);start.value=d.toISOString().slice(0,10);}
+  start.setCustomValidity(start.value&&end.value&&start.value>=end.value?'研究开始日期必须早于结束日期':'');
+  $('#research-start-note').textContent=mode==='year'?'（自动）':'';
+  $('#research-range-help').textContent=mode==='year'?'从结束日回溯完整一年；开始日期自动计算。':'可选择几个月或跨多年；实际可用范围以供应商数据和完整性校验为准。';
+}
+['#research-range','#research-start','#research-end'].forEach(id=>$(id).addEventListener('input',updateResearchRange));
+updateResearchRange();
+$('#research-form').onsubmit=async e=>{e.preventDefault();updateResearchRange();if(!e.currentTarget.reportValidity())return;const button=$('#research-submit');button.disabled=true;try{await api('/api/research/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:$('#research-symbol').value,rangeMode:$('#research-range').value,from:$('#research-start').value,to:$('#research-end').value,config:{...config(),timeframe:$('#research-period').value}})});toast('任务已保存并提交后台。');await refreshResearch();}catch(e){toast(e.message);}finally{button.disabled=false;}};
 $('#research-refresh').onclick=()=>refreshResearch();refreshResearch();
 
 async function refreshSources(){

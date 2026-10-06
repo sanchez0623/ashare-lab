@@ -13,6 +13,38 @@ const input=b=>({symbol:'600519',to:b.calendar.at(-1),config:{timeframe:'5m',dai
 async function until(manager,id,status=['completed','blocked','failed']){for(let i=0;i<200;i++){const j=manager.jobs.get(id);if(status.includes(j.status))return j;await new Promise(r=>setTimeout(r,50));}throw Error('任务超时');}
 async function setup(collector){const dir=await mkdtemp(path.join(tmpdir(),'ashare-research-'));const bucket=new FileBucket(path.join(dir,'warehouse'));const manager=await new ResearchManager({root:path.join(dir,'research'),bucket,collector}).init();return {dir,bucket,manager};}
 
+test('research dates preserve the year default and accept explicit or inferred custom intervals',()=>{
+ const req={symbol:'600519',to:'2026-09-30'};
+ assert.equal(normalizeRequest(req).from,'2025-10-01');assert.equal(normalizeRequest(req).rangeMode,'year');
+ assert.equal(normalizeRequest({...req,to:'2024-02-29'}).from,'2023-03-01');
+ for(const from of ['2026-09-01','2024-01-01']){
+  const custom=normalizeRequest({...req,from,rangeMode:'custom'});assert.equal(custom.from,from);assert.equal(custom.config.from,from);assert.equal(custom.config.to,req.to);assert.equal(custom.warmupSessions,60);
+  assert.deepEqual(normalizeRequest({...req,from}),custom);
+ }
+ for(const change of [{rangeMode:'custom'},{from:'2026-02-30'},{from:'2026-10-01'},{from:req.to},{rangeMode:'all'},{rangeMode:'year',from:'2024-01-01'},{from:''},{from:null},{to:'2026-13-01'}])assert.throws(()=>normalizeRequest({...req,...change}),e=>e.code==='REQUEST');
+ const today=new Date(Date.now()+8*3600000).toISOString().slice(0,10);assert.throws(()=>normalizeRequest({...req,to:today}),/北京时间今天/);
+ assert.equal(normalizeRequest({...req,from:'2024-01-01',config:{dailySlow:120}}).warmupSessions,120);
+});
+test('custom short and multi-year jobs count only the selected interval and replay immutable snapshots',async()=>{
+ for(const [days,fromIndex,timeframe] of [[360,320,'5m'],[660,80,'15m']]){
+  const b=fixture(days);let calls=0;const ctx=await setup(async()=>{calls++;return b;});
+  try{
+   const req={...input(b),rangeMode:'custom',from:b.calendar[fromIndex]};req.config.timeframe=timeframe;
+   const j=await ctx.manager.create(req),done=await until(ctx.manager,j.id);assert.equal(done.status,'completed',JSON.stringify(done.error));
+   const report=JSON.parse(await ctx.manager.report(done));assert.equal(report.request.rangeMode,'custom');assert.equal(report.request.from,req.from);assert.equal(report.request.to,req.to);
+   assert.equal(report.result.period.bars,(days-fromIndex)*(timeframe==='5m'?48:16));assert.ok(report.result.curve.every(p=>p.date.slice(0,10)>=req.from&&p.date.slice(0,10)<=req.to));assert.ok(report.result.trades.every(t=>t.executionTime.slice(0,10)>=req.from));assert.equal(report.result.audit.timingViolations,0);assert.equal(report.accounting.status,'passed');
+   const replay=await ctx.manager.repeat(j.id),again=await until(ctx.manager,replay.id);assert.equal(again.resultHash,done.resultHash);assert.equal(again.reportHash,done.reportHash);assert.equal(calls,1);
+   if(days===360){
+    // A changed collector must block old collection checkpoints, but cannot
+    // force a fixed, verified snapshot to fetch market data again.
+    const legacy=await ctx.manager.create(null,{replay:{...done,pipelineHash:hash('previous collector')}});assert.equal((await until(ctx.manager,legacy.id)).resultHash,done.resultHash);assert.equal(calls,1);
+    ctx.manager.pipelineFingerprint=hash('previous collector');const unfinished=await ctx.manager.create(req);assert.equal((await until(ctx.manager,unfinished.id)).error.code,'PIPELINE_CHANGED');assert.equal(calls,1);
+    const wrong=structuredClone(b);wrong.metadata.research={from:'2024-01-01',to:req.to,warmupSessions:60};assert.ok(acceptanceAudit(wrong,done.request).issues.some(i=>i.code==='RESEARCH_RANGE'));
+   }
+  }finally{await ctx.manager.close();await rm(ctx.dir,{recursive:true,force:true});}
+ }
+});
+
 test('one-year native-5m closed loop archives fees, corporate accounting and exact replay',async()=>{
  const b=dataset();let calls=0;const ctx=await setup(async()=>{calls++;return b;});let manager=ctx.manager;
  try{const j=await manager.create(input(b)),done=await until(manager,j.id);assert.equal(done.status,'completed',JSON.stringify(done.error));assert.equal(done.acceptance,'synthetic-test-only');assert.ok(done.metrics.quantity>0);assert.ok(done.metrics.fees>0);
@@ -61,6 +93,8 @@ test('local HTTP task API runs on backend and keeps replay pinned; rejects cross
   const r=await fetch(base+'/api/research/jobs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(input(b))});assert.equal(r.status,202);const job=await r.json(),done=await until(server.research,job.id);assert.equal(done.status,'completed');
   const report=await fetch(base+'/api/research/jobs/'+job.id+'/report');assert.equal(report.status,200);assert.equal(hash(Buffer.from(await report.arrayBuffer())),done.reportHash);
   const repeat=await(await fetch(base+'/api/research/jobs/'+job.id+'/repeat',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})).json();assert.equal((await until(server.research,repeat.id)).resultHash,done.resultHash);
-  const invalid=await fetch(base+'/api/research/jobs',{method:'POST',headers:{'content-type':'application/json'},body:'{"symbol":"600519","to":"2025-05-01","from":"2024-01-01"}'});assert.equal(invalid.status,400);
+  const customRequest={...input(b),rangeMode:'custom',from:b.calendar.at(-40)};
+  const custom=await fetch(base+'/api/research/jobs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(customRequest)});assert.equal(custom.status,202);const customJob=await custom.json();assert.equal(customJob.request.from,customRequest.from);assert.equal((await until(server.research,customJob.id)).status,'completed');
+  const invalid=await fetch(base+'/api/research/jobs',{method:'POST',headers:{'content-type':'application/json'},body:'{"symbol":"600519","rangeMode":"custom","to":"2025-05-01","from":"2025-05-02"}'});assert.equal(invalid.status,400);
  }finally{if(server)await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
 });

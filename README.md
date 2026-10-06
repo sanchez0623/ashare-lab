@@ -1,10 +1,10 @@
 # 青衡 · 沪深300波段研究台 v4
 
-不对接交易。历史沪深300成分准入、日线大波段、真实5/15分钟执行、历史ST过滤、公司行动账本与持久数据快照。单股一年5分钟自动验收流程已实现。已提交真实600519任务，但采集被当前环境的SDK TCP策略阻断，尚未通过真实数据验收；在自有可联网主机运行，无需API Key/Token。免费分钟连通性样例为600519，只能证明接口近期可用，资料不完整，不可正式回测。
+不对接交易。历史沪深300成分准入、日线大波段、真实5/15分钟执行、历史ST过滤、公司行动账本与持久数据快照。单股原生5分钟自动验收流程已实现，支持完整一年及自定义起止日期，自动额外采集指标预热历史。已提交真实600519任务，但采集被当前环境的SDK TCP策略阻断，尚未通过真实数据验收；在自有可联网主机运行，无需API Key/Token。免费分钟连通性样例为600519，只能证明接口近期可用，资料不完整，不可正式回测。
 
 ## 本地部署
 
-完整离线启动包与本地部署流程见 [LOCAL_DEPLOY.md](LOCAL_DEPLOY.md)。安装Node.js 22+即可 `npm start`，默认只监听127.0.0.1，使用 `.local-data/warehouse/` 持久文件仓库，无需云账号。已构建包不必先安装开发依赖。Windows另有 `start-local.cmd`，macOS/Linux有 `start-local.sh`。Python采集器文件锁支持Windows和POSIX。安装采集依赖后，网页“行情数据 → 单股一年数据验收”可自动分月采集、校验、入库、后台回测、双跑核对并保存报告。六类行情另存内容寻址Parquet并读回验证；原始响应保留审计。任务持久保存于 `.local-data/research/`；暂停/异常中断可恢复。固定快照复现不重新请求供应商。`collector/upload_local.py`仍可手工向本机入库，不用Site Token。
+完整离线启动包与本地部署流程见 [LOCAL_DEPLOY.md](LOCAL_DEPLOY.md)。安装Node.js 22+即可 `npm start`，默认只监听127.0.0.1，使用 `.local-data/warehouse/` 持久文件仓库，无需云账号。已构建包不必先安装开发依赖。Windows另有 `start-local.cmd`，macOS/Linux有 `start-local.sh`。Python采集器文件锁支持Windows和POSIX。安装采集依赖后，网页“行情数据 → 单股数据采集与回测”可自动分月采集、校验、入库、后台回测、双跑核对并保存报告。六类行情另存内容寻址Parquet并读回验证；原始响应保留审计。任务持久保存于 `.local-data/research/`；暂停/异常中断可恢复。固定快照复现不重新请求供应商。`collector/upload_local.py`仍可手工向本机入库，不用Site Token。
 
 ## 使用
 
