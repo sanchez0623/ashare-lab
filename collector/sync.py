@@ -192,7 +192,8 @@ def sync_one(args,symbol,board):
     finally:db.close()
 
 def main():
-    import requests,fcntl
+    import requests
+    from locking import FileLock
     original_request=requests.sessions.Session.request
     def bounded_request(self,*args,**kwargs):
         if not kwargs.get('timeout'):kwargs['timeout']=45
@@ -204,8 +205,7 @@ def main():
     pool=json.loads(pathlib.Path(a.pool).read_text()) if a.pool else [{'symbol':x,'board':a.board} for x in (a.symbols or '').split(',') if x]
     if not pool and not a.hs300_history:p.error('指定--pool或--symbols和--board')
     root=pathlib.Path(a.store);root.mkdir(parents=True,exist_ok=True)
-    lock=open(root/'.sync.lock','a')
-    try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    try:lock=FileLock(root/'.sync.lock')
     except BlockingIOError:raise RuntimeError('同步任务已在运行，本次跳过以免重叠写入。')
     global _GUARD,_BS
     restore=None;universe=None
@@ -247,6 +247,7 @@ def main():
         _BS=None
     if restore:restore()
     if _GUARD:_GUARD.close()
+    lock.close()
     return 1 if failures else 0
 if __name__=='__main__':
     try:sys.exit(main())

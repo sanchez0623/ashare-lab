@@ -1,3 +1,4 @@
 akshare>=1.19,<2
 baostock>=0.9.4,<1
 requests>=2.32,<3
+tzdata>=2024.1; platform_system == "Windows"

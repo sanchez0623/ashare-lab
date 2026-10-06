@@ -2,6 +2,10 @@
 
 不对接交易。历史沪深300成分准入、日线大波段、真实5/15分钟执行、历史ST过滤、公司行动账本与持久数据快照。当前真实BaoStock回填未运行：托管环境未授权SDK的TCP连接，须在自有联网主机采集；无需API Key/Token。免费分钟连通性样例为600519，只能证明接口近期可用，资料不完整，不可正式回测。
 
+## 本地部署
+
+完整离线启动包与本地部署流程见 [LOCAL_DEPLOY.md](LOCAL_DEPLOY.md)。安装Node.js 22+即可 `npm start`，默认只监听127.0.0.1，使用 `.local-data/warehouse/` 持久文件仓库，无需云账号。已构建包不必先安装开发依赖。Windows另有 `start-local.cmd`，macOS/Linux有 `start-local.sh`。Python采集器文件锁支持Windows和POSIX，`collector/upload_local.py`可向本机入库，不用Site Token。
+
 ## 使用
 
 发布后的“行情与完整性”页可下载采集器及部署说明，或阅读 [collector/README.md](collector/README.md)。原始JSON数据包上传私有R2仓库，服务端重新审计。数据包或模板必须标明真实/合成来源，示例包含合成行情与合成成员，不是真实沪深300数据。普通CSV只可探索，正式模式拦截。

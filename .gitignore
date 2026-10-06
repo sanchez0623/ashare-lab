@@ -10,3 +10,8 @@ collector/raw/
 collector/output/
 .env
 .env.*
+
+.local-data/
+collector/store/
+collector/universe-cache/
+*.zip

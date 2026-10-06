@@ -8,7 +8,7 @@ const fs=require('node:fs');
     page.on('pageerror',e=>errors.push(e.message));
     const run=async()=>{await page.locator('#run').click();await page.waitForFunction(()=>!document.querySelector('#run').disabled);};
     const report=async()=>{const event=page.waitForEvent('download');await page.locator('#export').click();return JSON.parse(fs.readFileSync(await(await event).path(),'utf8'));};
-    await page.goto('http://localhost:8080',{waitUntil:'networkidle'});
+    await page.goto(process.env.ASHARE_TEST_URL||'http://localhost:8080',{waitUntil:'networkidle'});
     await page.waitForFunction(()=>document.querySelector('#config-status').textContent.includes('回测完成'));
     assert.equal(await page.locator('#timeframe').inputValue(),'15m');
     assert.match(await page.locator('#result-title').innerText(),/大波段/);

@@ -2,6 +2,10 @@
 
 主要数据源为用户指定的BaoStock；无需API Key / Token。官方SDK使用TCP连接，当前托管执行环境没有相应TCP授权，因此未在此环境运行真实BaoStock回填。请在允许官方SDK联网的自有Linux主机运行。不要通过更换IP或并发连接绕过服务限制。
 
+## 在本地运行
+
+完整项目包的Windows / macOS / Linux启动、依赖、采集与本地上传步骤见根目录 [LOCAL_DEPLOY.md](../LOCAL_DEPLOY.md)。Windows使用 `collector\.venv\Scripts\python.exe`，macOS/Linux使用下文路径。锁兼容Windows与POSIX；Windows时区依赖会安装tzdata。本地文件仓库无需云账号或Site Token，可运行 `python collector/upload_local.py collector/store/output`，默认上传到本机8080端口。
+
 ## 首次拉取
 
 ```bash

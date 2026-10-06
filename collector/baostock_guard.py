@@ -3,16 +3,15 @@ Official policy: <=50,000 API requests/day, no concurrent connections.
 Our default: <=10,000/day and >=1 second/request. Other hosts behind the same
 public IP must coordinate the same budget; no local program can count them.
 """
-import datetime as dt,fcntl,os,pathlib,sqlite3,time
+import datetime as dt,os,pathlib,sqlite3,time
+from locking import FileLock
 from zoneinfo import ZoneInfo
 class TrafficGuard:
     def __init__(self,path=None,limit=10000,interval=1):
         if not 1<=limit<=40000 or interval<1:raise ValueError('保守预算最多40000，间隔至少1秒。')
         self.path=pathlib.Path(path or os.environ.get('BAOSTOCK_BUDGET_PATH',str(pathlib.Path.home()/'.cache/ashare-baostock/traffic.sqlite')));self.path.parent.mkdir(parents=True,exist_ok=True)
-        self.lock=open(str(self.path)+'.connection.lock','a')
-        try:fcntl.flock(self.lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        except BlockingIOError:
-            self.lock.close();raise RuntimeError('同一主机已有BaoStock连接；禁止并发，稍后串行运行。')
+        try:self.lock=FileLock(str(self.path)+'.connection.lock')
+        except BlockingIOError:raise RuntimeError('同一主机已有BaoStock连接；禁止并发，稍后串行运行。') from None
         self.db=sqlite3.connect(self.path);self.db.execute('CREATE TABLE IF NOT EXISTS budget(day TEXT PRIMARY KEY,count INTEGER,last REAL,blocked INTEGER)');self.limit=limit;self.interval=interval
     def reserve(self):
         day=dt.datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat()
@@ -26,7 +25,7 @@ class TrafficGuard:
     def block(self):
         day=dt.datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat()
         with self.db:self.db.execute('UPDATE budget SET blocked=1 WHERE day=?',(day,))
-    def close(self):self.db.close();fcntl.flock(self.lock,fcntl.LOCK_UN);self.lock.close()
+    def close(self):self.db.close();self.lock.close()
 
 def install(guard):
     import baostock.util.socketutil as sock
