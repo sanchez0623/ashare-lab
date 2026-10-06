@@ -22,7 +22,7 @@ export class FileBucket {
     return {objects:page.map(key=>({key})),truncated,cursor:truncated?Buffer.from(page.at(-1)).toString('base64url'):undefined};
   }
 }
-const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.zip':'application/zip','.csv':'text/csv; charset=utf-8'};
+const mime={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.zip':'application/zip','.csv':'text/csv; charset=utf-8','.pdf':'application/pdf','.md':'text/markdown; charset=utf-8'};
 export function fileAssets(root){const base=path.resolve(root);return {async fetch(request){
   try{const url=new URL(request.url),pathname=decodeURIComponent(url.pathname),target=path.resolve(base,'.'+(pathname==='/'?'/index.html':pathname));
     if(!target.startsWith(base+path.sep))return new Response('Forbidden',{status:403});

@@ -6,11 +6,11 @@ import datetime,hashlib,json,pathlib,sys,zipfile
 root=pathlib.Path(__file__).resolve().parents[1]
 out=pathlib.Path(sys.argv[1]) if len(sys.argv)>1 else root/'ashare-lab-local.zip'
 samples=pathlib.Path(sys.argv[2]) if len(sys.argv)>2 else None
-required=['dist/client/index.html','dist/client/app.js','dist/client/engine.mjs','dist/server/index.js','scripts/local-server.mjs','LOCAL_DEPLOY.md']
+required=['dist/client/index.html','dist/client/app.js','dist/client/engine.mjs','dist/client/guide.html','dist/client/USER_GUIDE.md','dist/server/index.js','scripts/local-server.mjs','LOCAL_DEPLOY.md','USER_GUIDE.md']
 for name in required:
  if not (root/name).is_file():raise RuntimeError('缺少 '+name+'；先运行 npm run build')
 files={}
-for name in ['README.md','LOCAL_DEPLOY.md','package.json','package-lock.json','wrangler.jsonc','.gitignore','start-local.cmd','start-local.sh']:
+for name in ['README.md','LOCAL_DEPLOY.md','USER_GUIDE.md','package.json','package-lock.json','wrangler.jsonc','.gitignore','start-local.cmd','start-local.sh']:
  files[name]=(root/name).read_bytes()
 for folder in ['dist','server','scripts','tests','collector']:
  for p in (root/folder).rglob('*'):
@@ -20,7 +20,7 @@ for folder in ['dist','server','scripts','tests','collector']:
   if p.name=='ashare-lab-local.zip':continue
   relative=p.relative_to(root).as_posix()
   if any(x in p.parts for x in ['node_modules','__pycache__','.venv','store','raw','output','universe-cache']):continue
-  if p.suffix not in ['.mjs','.js','.cjs','.css','.html','.json','.py','.md','.txt','.service','.timer','.zip']:continue
+  if p.suffix not in ['.mjs','.js','.cjs','.css','.html','.json','.py','.md','.pdf','.txt','.service','.timer','.zip']:continue
   files[relative]=p.read_bytes()
 if samples:
  for pattern in ['600519-daily-20251009-20260930.*','600519-native15m-20260402-20260930.*','600519-5m-47ccd3343049a4bbb966c1bd.json']:

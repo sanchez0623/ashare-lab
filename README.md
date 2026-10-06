@@ -6,6 +6,8 @@
 
 ## 本地部署
 
+详细的日常操作、数据采集、参数与费用设置、自动微调、方案比较、报告解读和排错见 [USER_GUIDE.md](USER_GUIDE.md)。网站顶部“操作说明书”可打开网页阅读版并下载PDF；完整部署包也包含三种格式，浏览器打开 `dist/client/guide.html` 可离线阅读。
+
 完整离线启动包与本地部署流程见 [LOCAL_DEPLOY.md](LOCAL_DEPLOY.md)。安装Node.js 22+即可 `npm start`，默认只监听127.0.0.1，使用 `.local-data/warehouse/` 持久文件仓库，无需云账号。已构建包不必先安装开发依赖。Windows另有 `start-local.cmd`，macOS/Linux有 `start-local.sh`。Python采集器文件锁支持Windows和POSIX。安装采集依赖后，网页“行情数据 → 单股数据采集与回测”可自动分月采集、校验、入库、后台回测、双跑核对并保存报告。六类行情另存内容寻址Parquet并读回验证；原始响应保留审计。任务持久保存于 `.local-data/research/`；暂停/异常中断可恢复。固定快照复现不重新请求供应商。`collector/upload_local.py`仍可手工向本机入库，不用Site Token。
 
 ## 使用
