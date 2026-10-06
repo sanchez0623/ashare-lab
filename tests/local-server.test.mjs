@@ -32,3 +32,17 @@ test('file warehouse paginates stable keys and rejects arbitrary paths',async()=
   assert.throws(()=>b.location('../secret'),/路径/);assert.equal(await b.get('snapshots/'+'f'.repeat(64)+'.json'),null);
  }finally{await rm(dir,{recursive:true,force:true});}
 });
+test('source readiness API caches configuration checks without requiring source SDKs',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'ashare-source-status-'));let server;
+ try{server=await startLocal({port:0,dataDir:dir,worker});const url='http://127.0.0.1:'+server.address().port+'/api/research/sources';
+  const [a,b]=await Promise.all([fetch(url).then(r=>r.json()),fetch(url).then(r=>r.json())]);assert.deepEqual(a,b);assert.equal(a.backend,'local');assert.equal(a.ttlSeconds,60);
+  if(a.sources.length){assert.deepEqual(a.sources.map(s=>s.name),['baostock','akshare','mootdx','lixinger','sina']);assert.match(a.probePolicy,/no market request/);assert.equal(a.sources.find(s=>s.name==='sina').requiresKey,false);}else assert.ok(['PYTHON_MISSING','SOURCE_STATUS_FAILED'].includes(a.code));
+ }finally{if(server)await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
+});
+test('missing Python does not stop local UI or turn a real task into demo success',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'ashare-no-python-')),previous=process.env.ASHARE_PYTHON;let server;
+ try{process.env.ASHARE_PYTHON=path.join(dir,'missing-python');server=await startLocal({port:0,dataDir:dir,worker});const url='http://127.0.0.1:'+server.address().port;
+  assert.equal((await fetch(url)).status,200);const readiness=await(await fetch(url+'/api/research/sources')).json();assert.equal(readiness.code,'PYTHON_MISSING');assert.deepEqual(readiness.sources,[]);
+  const j=await server.research.create({symbol:'600519',to:'2025-09-30',config:{timeframe:'5m'}});for(let i=0;i<100&&['queued','running'].includes(server.research.jobs.get(j.id).status);i++)await new Promise(r=>setTimeout(r,10));const task=server.research.jobs.get(j.id);assert.equal(task.status,'blocked');assert.equal(task.error.code,'PYTHON_MISSING');assert.equal(task.snapshotId,undefined);assert.equal((await fetch(url)).status,200);
+ }finally{if(previous===undefined)delete process.env.ASHARE_PYTHON;else process.env.ASHARE_PYTHON=previous;if(server)await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
+});

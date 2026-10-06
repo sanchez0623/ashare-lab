@@ -2,7 +2,7 @@ import {mkdir,readFile,writeFile,rename,readdir,rm,open,access} from 'node:fs/pr
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash,randomUUID} from 'node:crypto';
-import {spawn} from 'node:child_process';
+import {spawn,execFile} from 'node:child_process';
 import {Worker} from 'node:worker_threads';
 import {defaults,validate} from '../dist/engine.mjs';
 import {auditBundle} from '../dist/quality.mjs';
@@ -68,7 +68,7 @@ export function auditAccounting(result,bundle){
   return {status:'passed',valuationPoints:checked,fees,checks:['order and corporate cash/share movements','cash + tradable/locked stock value + dividend receivable','order fee sum','final equity','signal availability','sellable quantity']};
 }
 async function engineHash(){const files=['engine.mjs','quality.mjs','data.mjs','rules.mjs','corporate.mjs','fees.mjs','inventory.mjs'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,'dist',f)))]);parts.push(['runner',hash(await readFile(path.join(project,'server/research-runner.mjs')))]);return hash(canonical(parts));}
-async function pipelineHash(){const files=['server/research.mjs','collector/research_collect.py','collector/sync.py','collector/locking.py','collector/baostock_guard.py','collector/parquet_store.py'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,f)))]);return hash(canonical(parts));}
+async function pipelineHash(){const files=['server/research.mjs','collector/research_collect.py','collector/sources.py','collector/sync.py','collector/locking.py','collector/baostock_guard.py','collector/parquet_store.py'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,f)))]);return hash(canonical(parts));}
 const jsonResponse=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 
 export class ResearchManager {
@@ -137,6 +137,17 @@ export class ResearchManager {
   }
   async saveReport(job,report){const bytes=canonical(report),id=hash(bytes);await atomic(path.join(this.root,'reports',id+'.json'),bytes);job.reportHash=id;await this.save(job);}
   async python(){if(process.env.ASHARE_PYTHON)return process.env.ASHARE_PYTHON;for(const base of ['collector/.venv','.venv']){const venv=path.join(project,base,process.platform==='win32'?'Scripts/python.exe':'bin/python');try{await access(venv);return venv;}catch{}}return process.platform==='win32'?'python':'python3';}
+  async sourceStatus(){
+    if(this.sourceCache&&Date.now()-this.sourceCache.at<60000)return this.sourceCache.value;
+    if(this.sourceProbe)return this.sourceProbe;
+    this.sourceProbe=(async()=>{
+      const executable=await this.python();let value;
+      try{const stdout=await new Promise((resolve,reject)=>execFile(executable,[path.join(project,'collector/sources.py'),'--status'],{cwd:project,windowsHide:true,timeout:10000,maxBuffer:512*1024,encoding:'utf8'},(error,stdout)=>error?reject(error):resolve(stdout)));
+        value={backend:'local',ttlSeconds:60,...JSON.parse(stdout)};
+      }catch(e){value={backend:'local',ttlSeconds:60,error:'无法读取Python数据源配置；网页演示仍可运行。请安装Python或设置ASHARE_PYTHON。',code:e.code==='ENOENT'?'PYTHON_MISSING':'SOURCE_STATUS_FAILED',sources:[]};}
+      this.sourceCache={at:Date.now(),value};return value;
+    })();try{return await this.sourceProbe;}finally{this.sourceProbe=null;}
+  }
   async collectPython(job,collection){
     const executable=await this.python();await rm(path.join(collection,'error.json'),{force:true});
     const child=spawn(executable,[path.join(project,'collector/research_collect.py'),'--request',this.location(job.id,'request.json'),'--root',collection,'--store',path.join(this.root,'market'),'--parent',String(process.pid)],{cwd:project,windowsHide:true,stdio:['ignore','pipe','pipe']});this.child=child;
@@ -163,6 +174,7 @@ export class ResearchManager {
   async close(){this.stopping=true;if(this.active){this.active.controller.abort();await this.running;}await this.saves;await rm(this.lock,{recursive:true,force:true});}
   async fetch(request){
     try{const url=new URL(request.url),pathname=url.pathname,base='/api/research/jobs';
+      if(pathname==='/api/research/sources'&&request.method==='GET')return jsonResponse(await this.sourceStatus());
       if(request.method==='POST'){const origin=request.headers.get('origin');if(origin&&origin!==url.origin)return jsonResponse({error:'只接受本站任务写入'},403);if(!request.headers.get('content-type')?.startsWith('application/json'))return jsonResponse({error:'需要JSON请求'},415);}
       if(pathname===base&&request.method==='GET')return jsonResponse({jobs:[...this.jobs.values()].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(j=>this.view(j)),backend:'local',serial:true});
       if(pathname===base&&request.method==='POST')return jsonResponse(await this.create(await request.json()),202);

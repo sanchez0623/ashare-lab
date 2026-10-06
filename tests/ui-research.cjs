@@ -7,6 +7,7 @@ const fs=require('node:fs');
  try{const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(process.env.ASHARE_TEST_URL||'http://127.0.0.1:8082',{waitUntil:'networkidle'});await page.locator('nav [data-view=data]').click();
   await page.waitForFunction(()=>document.querySelector('#research-status').textContent.includes('后台串行'));
+  await page.waitForFunction(()=>document.querySelectorAll('#sources-table tbody tr').length===5);assert.match(await page.locator('#sources-status').innerText(),/不消耗行情或付费请求/);await page.locator('#sources-refresh').click();await page.waitForFunction(()=>!document.querySelector('#sources-refresh').disabled);assert.match(await page.locator('#sources-table').innerText(),/mootdx/);
   await page.locator('#research-symbol').fill('600519');await page.locator('#research-end').fill('2026-09-30');await page.locator('#research-period').selectOption('5m');
   const submitted=page.waitForResponse(r=>r.url().endsWith('/api/research/jobs')&&r.request().method()==='POST');await page.locator('#research-submit').click();const response=await submitted;assert.equal(response.status(),202);const job=await response.json();
   assert.equal(job.request.from,'2025-10-01');assert.equal(job.request.warmupSessions,60);assert.equal(job.request.config.capital,1000000);assert.equal(job.request.config.commission,.005);

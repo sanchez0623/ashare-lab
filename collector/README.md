@@ -75,10 +75,14 @@ journalctl -u ashare-sync.service
 
 AkShare新浪/东方财富仅作近期分钟补充，已验证此次约41/31个交易日，不能保证任意长历史。东财成交量“手”统一乘100，新浪/SDK按“股”。
 
-理杏仁仅实现已确认的官方日线端点，需要 `LIXINGER_TOKEN` 环境变量与相应权限；不声称可提供分钟历史。
+理杏仁仅实现已确认的官方日线端点，需要 `LIXINGER_API_KEY`（兼容 `LIXINGER_TOKEN`） 环境变量与相应权限；不声称可提供分钟历史。
 
 ```bash
 collector/.venv/bin/python collector/sync.py --symbols 600519 --board main --from 2023-01-01 --to 2026-09-30 --lixinger-daily
 ```
 
 密钥只配置在主机环境，不要发到聊天，不要放进JSON、日志或源码。
+
+## 统一可选行情源
+
+`collector/sources.py` 提供五源注册表和统一四方法，`--status` 仅检查配置、依赖及网络许可，不联网或消费理杏仁额度。安装 `requirements.txt` 足够运行BaoStock年度任务；`requirements-sources.txt` 为可选SDK合集，可单独安装AkShare/mootdx。来源降级、单位校准和历史证据要求见项目根LOCAL_DEPLOY.md第9节。缺少SDK不会影响网页合成演示，但真实任务仍会受阻，不静默变成合成成功。

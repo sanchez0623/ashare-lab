@@ -117,3 +117,16 @@ async function refreshResearch(){
 }
 $('#research-form').onsubmit=async e=>{e.preventDefault();const button=$('#research-submit');button.disabled=true;try{await api('/api/research/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:$('#research-symbol').value,to:$('#research-end').value,config:{...config(),timeframe:$('#research-period').value}})});toast('任务已保存并提交后台。');await refreshResearch();}catch(e){toast(e.message);}finally{button.disabled=false;}};
 $('#research-refresh').onclick=()=>refreshResearch();refreshResearch();
+
+async function refreshSources(){
+  const button=$('#sources-refresh');button.disabled=true;
+  try{const response=await fetch('/api/research/sources');if(response.status===404){$('#sources-status').textContent='此检查入口需要本地部署版后台。';return;}const data=await response.json();if(!response.ok||data.error)throw Error(data.error||'数据源配置不可用');
+    const labels={'ready-unprobed':'已配置 · 连通性未探测',healthy:'日线探测通过',blocked:'网络许可受阻',unavailable:'需要依赖 / 密钥 / 本地采集器',unhealthy:'探测失败'},names={baostock:'BaoStock',akshare:'AkShare / 东财',mootdx:'mootdx / 通达信',lixinger:'理杏仁',sina:'新浪'},codes={OPTIONAL_DEPENDENCY_MISSING:'可选SDK未安装',CREDENTIAL_MISSING:'缺少 LIXINGER_API_KEY',NETWORK_TCP_NOT_GRANTED:'当前执行环境未授予TCP连接',HOSTED_TCP_UNSUPPORTED:'托管网站不支持TCP采集，请用本地版',PYTHON_LOCAL_ONLY:'Python适配器在本地运行',COLLECTOR_LOCAL_ONLY:'分钟采集器在本地运行'};
+    $('#sources-status').textContent=data.backend==='hosted'?'网站配置检查 · 不消耗行情或付费请求 · 密钥仅供网站后端使用':'配置检查缓存60秒 · 不消耗行情或付费请求 · 密钥仅保存在采集主机环境变量';
+    $('#lixinger-probe').hidden=!(data.backend==='hosted'&&data.lixinger?.configured);
+    const p=data.lixinger?.lastProbe;$('#lixinger-status').textContent=p?`上次日线验证：${p.ok?'通过':'未通过（'+p.code+'）'} · ${new Date(p.checkedAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})} · ${p.symbol} · ${p.bars} 根。不能据此通过年度分钟验收。`:'';
+    $('#sources-table').innerHTML='<table><thead><tr><th>来源</th><th>配置状态</th><th>日线 / 5分钟 / 因子</th><th>历史辅助资料</th></tr></thead><tbody>'+data.sources.map(s=>`<tr><td>${esc(names[s.name]||s.name)}<br><small>${esc(s.transport.toUpperCase())}${s.requiresKey?' · 需密钥':''}</small></td><td>${esc(labels[s.health.state]||s.health.state)}${s.health.code?'<br><small>'+esc(codes[s.health.code]||s.health.code)+'</small>':''}</td><td>${['daily','minute5','adj_factor'].map(k=>s.capabilities.includes(k)?'支持':'—').join(' / ')}</td><td>${s.capabilities.includes('historical_st')?'逐日ST、日历、历史成员、公司行动':'不提供完整历史准入资料'}</td></tr>`).join('')+'</tbody></table>';
+  }catch(e){$('#sources-status').textContent=e.message;}finally{button.disabled=false;}
+}
+$('#sources-refresh').onclick=()=>refreshSources();refreshSources();
+$('#lixinger-probe').onclick=async()=>{const button=$('#lixinger-probe');button.disabled=true;try{const v=await api('/api/sources/lixinger/probe',{method:'POST'});await refreshSources();toast(v.ok?'理杏仁日线验证通过'+(v.cached?'（缓存）':''):'理杏仁验证未通过：'+v.code);}catch(e){toast(e.message);}finally{button.disabled=false;}};

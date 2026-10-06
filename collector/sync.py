@@ -108,8 +108,8 @@ def normalize_baostock(symbol,history_start,end,basic,cal,daily_raw,minute_raw,f
 
 def lixinger_daily(symbol,start,end,price_type='ex_rights'):
     import requests
-    token=os.environ.get('LIXINGER_TOKEN')
-    if not token:raise RuntimeError('缺少环境变量LIXINGER_TOKEN及相应日线API权限；不要将Token写入数据包。')
+    token=os.environ.get('LIXINGER_API_KEY') or os.environ.get('LIXINGER_TOKEN')
+    if not token:raise RuntimeError('缺少环境变量LIXINGER_API_KEY及相应日线API权限（兼容LIXINGER_TOKEN）；不要将密钥写入数据包。')
     # Official endpoint is DAILY only. Never market it as a verified minute feed.
     payload={'token':token,'stockCode':symbol,'type':price_type,'startDate':start,'endDate':end}
     r=retry(lambda:requests.post('https://open.lixinger.com/api/cn/company/candlestick',json=payload,timeout=45))
@@ -188,7 +188,7 @@ def sync_one(args,symbol,board):
     except Exception as e:
         # Do not emit remote response bodies, source tokens or credential-bearing URLs.
         message=str(e)
-        for env in ('LIXINGER_TOKEN','SITES_SERVICE_TOKEN'):
+        for env in ('LIXINGER_API_KEY','LIXINGER_TOKEN','SITES_SERVICE_TOKEN'):
             if os.environ.get(env):message=message.replace(os.environ[env],'[redacted]')
         with db:db.execute('UPDATE jobs SET finished=?,status=?,summary=? WHERE id=?',(dt.datetime.now(dt.timezone.utc).isoformat(),'failed',json.dumps({'error':message}),job))
         raise RuntimeError(message) from None

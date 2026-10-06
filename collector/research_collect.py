@@ -6,6 +6,7 @@ No synthetic data or alternative IP/proxy route is used on a network failure.
 import argparse, datetime as dt, hashlib, json, os, pathlib, sys, tempfile
 from sync import bs_rows, normalize_baostock, db_open, merge_bars
 from locking import FileLock
+from sources import BaoStockSource
 
 VERSION='research-collector-1'
 def encode(value):
@@ -77,6 +78,7 @@ def collect(request,root,store,emit=lambda x:None,parent=None,bs=None,guard_fact
         login=bs.login()
         if login.error_code!='0':raise Blocked('PROVIDER_LOGIN','BaoStock登录失败：'+login.error_code)
         logged=True;symbol=request['symbol'];code=('sh.' if symbol.startswith('6') else 'sz.')+symbol;end=request['to']
+        source=BaoStockSource(sdk=bs,check=check)
         q=lambda key,fn:cache.query(key,lambda:bs_rows(fn()))
         calendar=q(['calendar','1990-12-19',end],lambda:bs.query_trade_dates(start_date='1990-12-19',end_date=end))
         days=[r['calendar_date'] for r in calendar if r['is_trading_day']=='1']
@@ -87,9 +89,9 @@ def collect(request,root,store,emit=lambda x:None,parent=None,bs=None,guard_fact
         basic=q(['basic',code],lambda:bs.query_stock_basic(code=code))
         if len(basic)!=1 or basic[0].get('code')!=code:raise Blocked('SECURITY_IDENTITY','证券基本资料缺失或代码不符。')
         # Reject future provider rows rather than silently filtering them.
-        daily=q(['daily',code,start,end],lambda:bs.query_history_k_data_plus(code,'date,code,open,high,low,close,preclose,volume,amount,tradestatus,isST',start_date=start,end_date=end,frequency='d',adjustflag='3'))
+        daily=cache.query(['daily',code,start,end],lambda:source.get_daily(symbol,start,end).raw)
         if any(r.get('code')!=code or not start<=r.get('date','')<=end for r in daily):raise Blocked('PROVIDER_RANGE','日线响应证券或日期不符。')
-        factors=q(['factors',code,start,end],lambda:bs.query_adjust_factor(code,start_date=start,end_date=end))
+        factors=cache.query(['factors',code,start,end],lambda:source.get_adj_factor(symbol,start,end).raw)
         dividends=[]
         for year in range(int(start[:4])-1,int(end[:4])+1):
             dividends+=q(['dividends',code,year,'operate'],lambda year=year:bs.query_dividend_data(code,year=str(year),yearType='operate'))
@@ -102,7 +104,7 @@ def collect(request,root,store,emit=lambda x:None,parent=None,bs=None,guard_fact
             date=next(iter(updated));universe.append({'date':day,'updateDate':date,'knownAt':date+' 15:00','codes':codes,'source':'baostock query_hs300_stocks(date)','granularity':'weekly'})
         minute=[]
         for left,right in months(start,end):
-            rows=q(['minute',code,'5',left,right,'raw'],lambda left=left,right=right:bs.query_history_k_data_plus(code,'date,time,code,open,high,low,close,volume,amount,adjustflag',start_date=left,end_date=right,frequency='5',adjustflag='3'))
+            rows=cache.query(['minute',code,'5',left,right,'raw'],lambda left=left,right=right:source.get_minute5(symbol,left,right).raw)
             if any(r.get('code')!=code or not left<=r.get('date','')<=right or r.get('adjustflag')!='3' for r in rows):raise Blocked('PROVIDER_RANGE','分钟响应证券、日期或原始价格口径不符。')
             minute+=rows
         result=normalize_baostock(symbol,start,end,basic,calendar,daily,minute,factors,dividends)

@@ -64,3 +64,7 @@ python -m unittest discover -s tests -p "*collector_test.py" -v
 本站保持所有者私有，平台在Worker前鉴权；后台写入使用只发送给同一Site的OAI-Sites-Authorization服务凭据。无交易API。本地版已接入持久后台单股验收任务，API和部署步骤见LOCAL_DEPLOY.md；未启用定时增量任务。附systemd定时器可在自有主机按北京时间16:30串行运行，需实际部署和验收，详见采集器说明。
 
 JSON报告保存对应行情、策略、成交/日线信号时间、净值、公司行动账本与质量审计；参数或标的切换而未回测时，导出仍对应上次已完成结果。
+
+## 统一多源接口
+
+`collector/sources.py` 延迟注册BaoStock、AkShare、mootdx、理杏仁和新浪，按数据类型提供辅助降级；未安装可选SDK时available=False。`requirements.txt` 为最小年度安装，额外SDK见requirements-sources.txt。网页新增就绪情况入口和 `GET /api/research/sources`（60秒配置缓存，无行情/付费探测）。年度自动采集已复用统一BaoStock适配器，正式多源混合准入仍需历史资料和单位校验；mootdx真实连接未验证。详情见LOCAL_DEPLOY.md。

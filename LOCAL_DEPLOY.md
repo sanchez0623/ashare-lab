@@ -145,10 +145,47 @@ npm test
 
 结构仍是Node服务+Python采集器，回测采用网页同一套已测试的JS引擎，后台Worker线程独立执行。单个服务串行调度持久任务，不依赖浏览器存储；本地文件仓库与SQLite需要与源码一起备份。当前结果仍属于单机研究系统，真实完整一年数据验收尚待在BaoStock可连通环境完成。
 
-## 数据源方案参考与本次范围
+## 9. 统一数据源接口与可选依赖
 
-用户另一个项目采用BaoStock日线主、AkShare日线备、mootdx分钟主、理杏仁日线末备、新浪分钟末备，并以Parquet落地。本次已采纳Parquet归档：记录文件哈希与逻辑内容哈希，读回核验，再发布快照。SQLite保留去重索引和冲突隔离，JSON原始响应保留请求证据；每类数据保留来源。
+`collector/sources.py` 注册五源，统一提供 `get_daily / get_minute5 / get_adj_factor / get_index_daily`；不支持的能力会明确返回 `UNSUPPORTED`。可选SDK延迟导入，未安装时 `available()=False`，不影响Node启动或显式合成演示。默认安装 `collector/requirements.txt` 仅包含年度验收必需的核心库和BaoStock；其余可按需安装。
 
-自动验收本次仍使用BaoStock原生5分钟及其配套历史资料，不在失败时静默混源。AkShare/新浪及理杏仁现有辅助采集适配器保留。日线的四级降级链、mootdx分钟适配、腾讯实时qt和行业源尚未纳入自动验收。分钟源缺失不能由日线备源弥补。
+```bash
+collector/.venv/bin/python -m pip install -r collector/requirements-sources.txt
+collector/.venv/bin/python collector/sources.py --status
+```
 
-已查阅 [mootdx分钟接口](https://www.mootdx.com/api/quotes.html) 与 [源码](https://github.com/mootdx/mootdx/blob/master/mootdx/quotes.py)：bars单次最多800根，支持offset/start分页，使用通达信TCP服务器。分页能力不保证远端保留整年数据；还需本地主机对每只证券的年度覆盖、时间戳、原始价与成交量单位实际验证。当前环境无TCP白名单，因此未把mootdx标为已连通或已完成一年回填。后续启用多源时须逐段留存来源、核对独立日线与重叠差异，存在修订冲突则隔离，不能拼接后直接宣称完整。
+Windows替换为 `collector\.venv\Scripts\python.exe`。也可单独 `pip install akshare` 或 `pip install mootdx`。理杏仁设置采集主机环境变量 `LIXINGER_API_KEY`，兼容旧 `LIXINGER_TOKEN`，无需写入浏览器或数据包。
+
+网页“行情数据 → 数据源就绪情况”和 `GET /api/research/sources` 显示五源依赖、密钥是否配置及网络许可；缓存60秒，**不会发行情请求或自动消费付费额度**。“已配置”不代表接口连通或年度完整。SDK层 `check_health(probe=...)` 支持显式健康探测和60秒缓存，探测须经过同一适配器和限流。
+
+| 类型 | 辅助请求降级顺序 |
+| --- | --- |
+| 日线 | BaoStock → AkShare → mootdx → 理杏仁 |
+| 科创板日线 | mootdx → BaoStock → AkShare → 理杏仁 |
+| 历史5分钟 | BaoStock → mootdx → AkShare → 新浪 |
+| 盘中5分钟 | mootdx → 新浪 |
+| 因子候选 | AkShare hfq/raw比值 → BaoStock事件因子 |
+| 指数日线 | BaoStock → AkShare |
+
+辅助CLI示例：
+
+```bash
+collector/.venv/bin/python collector/sources.py --kind daily --symbol 600519 --from 2025-10-01 --to 2026-09-30
+collector/.venv/bin/python collector/sources.py --kind minute5 --purpose intraday --symbol 600519 --from 2026-09-01 --to 2026-09-30
+```
+
+这些输出是带来源和原始响应哈希的辅助候选数据，不会直接进入正式回测。`SourceRouter.fetch(..., expected_dates=..., purpose="annual")` 要求独立日历，校验全部48根原生5分钟网格及成交量单位；短历史继续降级，全部不满足时失败，不混入合成数据。每次选中完整候选源，保留各次拒绝原因，不把不同源片段静默拼接；BaoStock日额度/连接锁/黑名单阻断会直接停止。
+
+### 年度自动验收与多源的界限
+
+年度任务已经通过统一BaoStock适配器采集，但仍固定一个完整来源及其历史ST、成员、日历、公司行动和交易所参考价证据；五源的辅助降级链不会自动替代这些正式准入资料。今天 `query_all_stock` 的名称/ST/退市状态不能充当历史逐日状态，实际研究继续使用逐日日线 `isST` 和历史成员快照。新增多源正式任务前需完成来源间量价、单位与权益审计。
+
+mootdx适配器已实现 `frequency=0/9`、每页800根、最多64页、串行间隔、重复分页检测；已通过传输夹具测试，当前环境未安装可选SDK，且没有TCP许可，未宣称真实连通。返回成交量保留供应商单位，必须用独立股单位日线校准后才能正式准入，不猜测倍数。远端分页能力不保证保留整年数据。
+
+AkShare的hfq/raw比值只作为因子候选，不能取代当时可得的因子链和完整分红送转账务。理杏仁排最后保护付费额度，每次选择只请求一次，不自动付费重试。新浪请求5049根返回空时仅降为1970根请求一次；本次真实HTTP实测仍只有1970根（2026-08-03 14:55至2026-09-30 15:00），不是完整一年。
+
+HTTP会话默认继承代理和CA；当前云环境必须保留这些设置，不照搬 `trust_env=False`。自有主机确需禁用环境代理时可设置 `ASHARE_HTTP_TRUST_ENV=0`，该选项不会在受管云环境关闭代理。第三方SDK的HTTP请求设定默认超时；BaoStock所有SDK分页继续共用原用量锁与计数器。
+
+Parquet归档继续按逻辑内容与文件双哈希保存六类行情，原始响应保留审计依据。腾讯qt实时行情、申万/乐咕行业及股票基础信息的完整更新器尚未接入；它们不影响本次单股年度目标。真实完整一年验收仍等待在BaoStock可连通且资料完整的主机完成。
+
+托管网站还支持私有环境变量 `LIXINGER_API_KEY`、`LIXINGER_TOKEN` 或已有的 `lixingren-key`。浏览器只能看到配置状态，不能读取密钥；显式日线验证请求600519在2026-09-30的一根原始日线，单次请求无自动重试，结果及失败缓存24小时，并留存原始行情哈希。网站密钥不会自动传给本地Python；本地仍需配置标准环境变量。该探测不提供年度分钟数据，也不会自动进入正式回测。

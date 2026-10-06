@@ -1,8 +1,11 @@
 import {auditBundle} from '../dist/quality.mjs';
+import {hostedSourceStatus,probeLixinger} from './hosted-sources.mjs';
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 export default {async fetch(request,env){
   const url=new URL(request.url);if(!url.pathname.startsWith('/api/'))return env.ASSETS.fetch(request);
   try{
+    if(url.pathname==='/api/research/sources'&&request.method==='GET')return await hostedSourceStatus(env);
+    if(url.pathname==='/api/sources/lixinger/probe'&&request.method==='POST')return await probeLixinger(request,env);
     if(!env.BUCKET)return reply({error:'行情仓库暂不可用，请稍后重试；当前文件仍可保留在浏览器中。'},503);
     if(url.pathname==='/api/data/catalog'&&request.method==='GET'){
       const listed=await env.BUCKET.list({prefix:'manifests/',limit:100,cursor:url.searchParams.get('cursor')||undefined});const entries=await Promise.all(listed.objects.map(async x=>{const obj=await env.BUCKET.get(x.key);return obj?await obj.json():null;}));return reply({entries:entries.filter(Boolean).sort((a,b)=>b.syncedAt.localeCompare(a.syncedAt)),truncated:listed.truncated,cursor:listed.truncated?listed.cursor:null});
