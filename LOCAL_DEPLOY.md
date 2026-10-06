@@ -103,11 +103,11 @@ collector/.venv/bin/python collector/upload_local.py collector/store/output
 | `collector/store/` | 采集SQLite、原始响应、输出JSON及成分缓存 |
 | 用户目录 `~/.cache/ashare-baostock/` | 本机共享请求预算和连接锁 |
 | 浏览器本地存储 | 最近20次研究摘要；换浏览器或端口不共享 |
-| `data/samples/` | 随包真实行情样例；正式资料未齐 |
+| `data/samples/`（如有） | 可选的真实行情样例；网站标准下载包不包含此目录 |
 
 停服务后备份整个项目文件夹即可同时保留本地仓库、采集文件与源码；浏览器记录需另外导出回测报告。移动项目不会移动用户目录中的BaoStock日预算，不要删除它来重置限额。自定义仓库目录：`node scripts/local-server.mjs --data-dir D:\ashare-data` 或相应绝对路径。
 
-包内已带最近一年日线（241根）和原生15分钟约半年（1970根）及5分钟近期样例。对应JSON保留资料不足状态；如需体验真实价格，可上传CSV并显式选择“CSV探索”，不视为正式盈利验证。样例不能填补一年分钟缺口。
+网站标准下载包不附带真实历史行情，首次打开默认展示合成演示。真实行情需使用自动采集任务或导入自有数据。另行包含 `data/samples/` 的版本提供辅助样例；对应JSON保留资料不足状态，上传CSV时需显式选择“CSV探索”，不能据此视为正式盈利验证或填补一年分钟缺口。
 
 ## 6. 定时采集
 
