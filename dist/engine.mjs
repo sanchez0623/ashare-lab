@@ -10,7 +10,7 @@ export { parseCSV, demoData, demoMinuteData, detectTimeframe, resampleData, dail
 export const defaults = {
   strategy:'swing', timeframe:'15m', dataMode:'exploration', board:'main', rulesMode:'historical', taxMode:'manual', fast:10, slow:30,
   confirmationDays:2, maxGap:3, maxExtensionATR:2, minTrades:20, minProfitFactor:1.2, maxDrawdown:20, objective:'quality', dailyFast:20, dailySlow:60, breakout:20, exitPeriod:20, atrPeriod:14, atrMult:3, cooldownDays:3,
-  rsiPeriod:14, rsiBuy:30, rsiSell:70, bbPeriod:20, bbMult:2,
+  rsiPeriod:14, rsiBuy:30, rsiSell:70, bbPeriod:20, bbMult:2, macdFast:12, macdSlow:26, macdSignal:9,
   capital:1000000, allocation:95, commission:0.005, minCommission:5,
   stamp:0.05, handling:0.00341, regulatory:0.002, transfer:0.001, slippage:5, limit:10, stop:8, take:0,
   management:'pyramid', baseAllocation:40, addAllocation:20, maxAdds:2, addATR:1, addSpacing:2, riskBudget:2,
@@ -26,7 +26,7 @@ export function ema(xs,n) {
 }
 export function indicators(data,c) {
   const xs=data.map(x=>x.signal_close??x.close), fast=sma(xs,c.fast), slow=sma(xs,c.slow);
-  const e12=ema(xs,12),e26=ema(xs,26),dif=e12.map((v,i)=>v-e26[i]),dea=ema(dif,9);
+  const eFast=ema(xs,c.macdFast??12),eSlow=ema(xs,c.macdSlow??26),dif=eFast.map((v,i)=>v-eSlow[i]),dea=ema(dif,c.macdSignal??9);
   let gain=0,loss=0;
   const rsi=xs.map((v,i)=>{
     if(!i)return null;const d=v-xs[i-1];
@@ -55,8 +55,9 @@ export function validate(c) {
   if(!Number.isInteger(c.confirmationDays)||c.confirmationDays<1||c.confirmationDays>10||c.maxGap<0||c.maxGap>20||c.maxExtensionATR<=0||c.maxExtensionATR>10||!Number.isInteger(c.minTrades)||c.minTrades<5||c.minTrades>500||c.minProfitFactor<1||c.minProfitFactor>10||c.maxDrawdown<=0||c.maxDrawdown>100||!['quality','return'].includes(c.objective))throw Error('入场过滤或训练准入参数无效。');
   if(!['swing','ma','macd','rsi','boll'].includes(c.strategy))throw Error('策略无效。');
   if(!['1d','5m','15m'].includes(c.timeframe))throw Error('请选择日线、5 分钟或 15 分钟周期。');
-  for(const k of ['fast','slow','dailyFast','dailySlow','breakout','exitPeriod','atrPeriod','rsiPeriod','bbPeriod'])if(!Number.isInteger(c[k])||c[k]<2||c[k]>250)throw Error('指标周期需为 2–250 的整数。');
+  for(const k of ['fast','slow','dailyFast','dailySlow','breakout','exitPeriod','atrPeriod','rsiPeriod','bbPeriod','macdFast','macdSlow','macdSignal'])if(!Number.isInteger(c[k])||c[k]<2||c[k]>250)throw Error('指标周期需为 2–250 的整数。');
   if(c.fast>=c.slow||c.dailyFast>=c.dailySlow)throw Error('短期均线必须小于长期均线。');
+  if(c.macdFast>=c.macdSlow)throw Error('MACD 快线周期必须小于慢线周期。');
   if(!Number.isInteger(c.cooldownDays)||c.cooldownDays<0||c.cooldownDays>30)throw Error('冷却期需为 0–30 个交易日。');
   if(c.atrMult<0||c.atrMult>10)throw Error('ATR 倍数需在 0–10 之间；0 为禁用。');
   if(c.capital<1000||c.capital>1e9)throw Error('初始资金需在 1,000–10 亿之间。');
@@ -66,7 +67,7 @@ export function validate(c) {
   for(const k of ['commission','stamp','handling','regulatory','transfer','slippage','stop','take','minCommission'])if(c[k]<0)throw Error('成本与风控参数不能为负数。');
   if(c.stop>100||c.take>1000||c.slippage>1000||c.commission>5||c.stamp>5||c.transfer>5||c.handling>5||c.regulatory>5||c.minCommission>10000)throw Error('成本或风控参数超出合理范围。');
   if(!['base','pyramid','positive','reverse','adaptive'].includes(c.management))throw Error('仓位方案无效。');
-  if(c.baseAllocation<=0||c.baseAllocation>c.allocation||c.addAllocation<=0||c.addAllocation>100||!Number.isInteger(c.maxAdds)||c.maxAdds<0||c.maxAdds>10||c.addATR<=0||c.addATR>10||!Number.isInteger(c.addSpacing)||c.addSpacing<1||c.addSpacing>30||c.riskBudget<=0||c.riskBudget>20)throw Error('底仓、加仓或风险预算参数无效。');
+  if(c.baseAllocation<=0||c.baseAllocation>100||(c.strategy==='swing'&&c.baseAllocation>c.allocation)||c.addAllocation<=0||c.addAllocation>100||!Number.isInteger(c.maxAdds)||c.maxAdds<0||c.maxAdds>10||c.addATR<=0||c.addATR>10||!Number.isInteger(c.addSpacing)||c.addSpacing<1||c.addSpacing>30||c.riskBudget<=0||c.riskBudget>20)throw Error('底仓、加仓或风险预算参数无效。');
   if(c.tAllocation<=0||c.tAllocation>30||c.tDeviation<=0||c.tDeviation>10||c.tTarget<=0||c.tTarget>10||c.tStop<=0||c.tStop>20||!Number.isInteger(c.tMaxBars)||c.tMaxBars<1||c.tMaxBars>96||!Number.isInteger(c.tDailyPairs)||c.tDailyPairs<1||c.tDailyPairs>10||c.tCostBuffer<1||c.tCostBuffer>10)throw Error('做 T 参数无效。');
   if(c.strategy==='swing'&&c.management!=='base'&&c.stop===0&&c.atrMult===0)throw Error('分仓管理需启用固定止损或 ATR 止损以计算风险预算。');
   if(![0,5,10,20,30].includes(c.limit))throw Error('涨跌停比例无效。');
@@ -89,7 +90,7 @@ export function backtest(input,config={}) {
   const gapDays=halts.filter(d=>d.date>=c.from&&d.date<=c.to).map(d=>d.date);let gapIndex=0;
   const start=data.findIndex(r=>dayOf(r)>=c.from),end=data.findLastIndex(r=>dayOf(r)<=c.to);
   if(start<0||end<=start)throw Error('所选日期内至少需要两根 K 线。');
-  const warm={swing:c.slow,ma:c.slow,macd:35,rsi:c.rsiPeriod+1,boll:c.bbPeriod}[c.strategy];
+  const warm={swing:c.slow,ma:c.slow,macd:c.macdSlow+c.macdSignal,rsi:c.rsiPeriod+1,boll:c.bbPeriod}[c.strategy];
   if(start<warm)throw Error(`开始日期前至少需要 ${warm} 根执行周期 K 线作为指标预热。`);
   const dailyWarm=Math.max(c.confirmationDays+1,c.dailySlow,c.breakout+1,c.exitPeriod,c.atrPeriod);
   if(c.strategy==='swing'&&completeDays.filter(d=>d.availableAt<executionTime(data[start],c.timeframe)).length<dailyWarm)
@@ -103,7 +104,7 @@ export function backtest(input,config={}) {
   const feeTotals={commission:0,stamp:0,handling:0,regulatory:0,transfer:0};
   const ledger=new CorporateLedger(actions),benchmarkLedger=new CorporateLedger(actions);
   let benchmarkQty=Math.floor(c.capital/data[start].open),benchmarkCash=c.capital-benchmarkQty*data[start].open,lastDay=null;
-  const audit={engineVersion:'4.1-single-security-swing-T',inventoryPolicy:'FIFO sell only prior-date purchases; listed bonus shares immediately available; one shared cash book',feePolicy:'five separate per-order fees; fixed user rates by default; no bundled commission',management:c.management,rulesVersion,qualityReport,snapshotId:c.snapshotId??null,board:c.board,stExcluded:0,unknownSTAssumption:!metadata,corporatePolicy:'record-date entitlement; receivable on ex-date; pay/list date release; rights blocked; fractional bonus floored',dividendTax:'gross or provided net per event; no personalized holding-period tax',timingViolations:0,decisions:0,sameBarRangeUsed:false,sameBarVolumeUsed:false,dailyAvailableAfter:'15:00 Asia/Shanghai',breakoutShift:1};
+  const audit={engineVersion:'4.2-configurable-macd',inventoryPolicy:'FIFO sell only prior-date purchases; listed bonus shares immediately available; one shared cash book',feePolicy:'five separate per-order fees; fixed user rates by default; no bundled commission',management:c.management,rulesVersion,qualityReport,snapshotId:c.snapshotId??null,board:c.board,stExcluded:0,unknownSTAssumption:!metadata,corporatePolicy:'record-date entitlement; receivable on ex-date; pay/list date release; rights blocked; fractional bonus floored',dividendTax:'gross or provided net per event; no personalized holding-period tax',timingViolations:0,decisions:0,sameBarRangeUsed:false,sameBarVolumeUsed:false,dailyAvailableAfter:'15:00 Asia/Shanghai',breakoutShift:1};
   let feeDay=c.from;
   const fee=(amount,sell)=>orderFees(amount,sell,c,feeDay).total;
   const charge=(amount,sell)=>{const detail=orderFees(amount,sell,c,feeDay);for(const k of Object.keys(feeTotals))feeTotals[k]+=detail[k];fees+=detail.total;return detail;};
@@ -282,12 +283,17 @@ export function compareParameters(data,config) {
   const split=Math.floor(days.length*.7),trainTo=days[split-1],validationFrom=days[split];
   const combinations=[];
   if(c.strategy==='swing')for(const dailySlow of[60,90,120])for(const atrMult of[2,3,4])combinations.push({...c,dailySlow,atrMult});
-  else for(const fast of[5,10,20])for(const slow of[30,60,90])combinations.push({...c,strategy:'ma',fast,slow});
+  else if(c.strategy==='ma')for(const fast of[5,10,20])for(const slow of[30,60,90])combinations.push({...c,fast,slow});
+  else if(c.strategy==='macd')for(const macdFast of[8,12,16])for(const macdSlow of[22,26,30])combinations.push({...c,macdFast,macdSlow});
+  else if(c.strategy==='rsi')for(const rsiPeriod of[10,14,20])for(const rsiBuy of[20,30,40])combinations.push({...c,rsiPeriod,rsiBuy});
+  else for(const bbPeriod of[15,20,30])for(const bbMult of[1.5,2,2.5])combinations.push({...c,bbPeriod,bbMult});
   const rows=combinations.map(params=>{
-    try{const training=backtest(data,{...params,to:trainTo});const validation=backtest(data,{...params,from:validationFrom});return {config:params,training:training.metrics,validation:validation.metrics,quality:qualityScore(training.metrics,c)};}
+    try{const training=backtest(data,{...params,to:trainTo});return {config:params,training:training.metrics,quality:qualityScore(training.metrics,c)};}
     catch(e){return {config:params,error:e.message};}
   });
-  rows.sort((a,b)=>a.error?1:b.error?-1:c.objective==='return'?b.training.total-a.training.total:Number(b.quality.eligible)-Number(a.quality.eligible)||b.quality.score-a.quality.score);
+  rows.sort((a,b)=>Number(!!a.error)-Number(!!b.error)||(a.error||b.error?0:c.objective==='return'?b.training.total-a.training.total:Number(b.quality.eligible)-Number(a.quality.eligible)||b.quality.score-a.quality.score));
+  // Freeze training order before any held-out metrics or validation failures.
+  for(const row of rows)if(!row.error)try{row.validation=backtest(data,{...row.config,from:validationFrom}).metrics;}catch(e){row.validationError=e.message;}
   return {rows,trainFrom:c.from,trainTo,validationFrom,validationTo:c.to,selectionRule:c.objective==='return'?'training_return_only':'training_quality_only',qualified:rows.filter(r=>r.quality?.eligible).length,positionPolicy:'validation starts flat; past bars used only for indicator warmup'};
 }
 

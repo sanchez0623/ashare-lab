@@ -1,23 +1,29 @@
 import {tuningCandidates} from './parameter-tuning.mjs';
 import {managementNames,periodLabel} from './engine.mjs';
+import {parameterSchema,tuningSpecs,strategyNames,candidateLabel} from './parameter-schema.mjs';
 
 export function setupOptimization({getContext,setConfig,showView,runBacktest,notify}){
   const $=s=>document.querySelector(s),escape=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const number=v=>Number.isFinite(v)?v.toLocaleString('zh-CN',{maximumFractionDigits:2}):'—';
   const percent=v=>Number.isFinite(v)?number(v*100)+'%':'—';
-  const changeNames={dailySlow:'日线长均线',atrMult:'ATR跟踪倍数',confirmationDays:'连续确认',management:'仓位方案'};
+  const changeNames=Object.fromEntries(Object.entries(parameterSchema).map(([k,v])=>[k,v.label]));
   const options=()=>Object.fromEntries([...new FormData($('#tuning-form'))].map(([k,v])=>[k,Number(v)]));
-  let activeRun=null,report=null,reportData=null;
+  let activeRun=null,report=null,reportData=null,stepStrategy=null;
   const sourceLabel=context=>context.source==='demo'||context.data?.metadata?.synthetic?'合成数据 · 仅验证功能流程':context.source==='bundle'?(context.quality?.status==='warning'?'行情数据包 · 带量价警告（未修复）':context.quality?.status==='passed'?'行情数据包 · 结构校验通过':'行情数据包 · 资料未通过准入'):'CSV探索 · 历史资料未校验';
   function refresh(){
     const context=getContext(),c=context.config;
+    if(stepStrategy!==c.strategy){
+      stepStrategy=c.strategy;
+      $('#tuning-steps').innerHTML=tuningSpecs[c.strategy].map(([key,option,value,min,max])=>`<label>${parameterSchema[key].label}步长<input name="${option}" type="number" min="${min}" max="${max}" step="${min<1?min:1}" value="${value}" required></label>`).join('');
+    }
+    $('#tuning-management').disabled=!!activeRun||c.strategy!=='swing';
     document.querySelectorAll('[data-training-key]').forEach(input=>{if(document.activeElement!==input)input.value=c[input.dataset.trainingKey];});
     $('#tuning-source').textContent=context.name+' · '+sourceLabel(context);
-    $('#tuning-context').textContent=`${c.from} — ${c.to} · ${periodLabel(c.timeframe)}\n资金 ¥${number(c.capital)} · ${managementNames[c.management]}\n训练门槛：平仓≥${c.minTrades}笔，盈利因子≥${c.minProfitFactor}，回撤≤${c.maxDrawdown}%`;
-    try{const {grid,candidates}=tuningCandidates(c,options());$('#tuning-grid').textContent=`日线长均线：${grid.dailySlow.join(' / ')} 日；ATR：${grid.atrMult.join(' / ')}；连续确认：${grid.confirmationDays.join(' / ')} 日。共${candidates.length}组，包含当前配置。`;}
+    $('#tuning-context').textContent=`${strategyNames[c.strategy]} · ${c.from} — ${c.to} · ${periodLabel(c.timeframe)}\n资金 ¥${number(c.capital)} · ${c.strategy==='swing'?managementNames[c.management]:'固定总仓位上限 '+c.allocation+'%'}\n训练门槛：平仓≥${c.minTrades}笔，盈利因子≥${c.minProfitFactor}，回撤≤${c.maxDrawdown}%`;
+    try{const {grid,candidates}=tuningCandidates(c,options());$('#tuning-grid').textContent=Object.entries(grid).map(([k,v])=>parameterSchema[k].label+'：'+v.join(' / ')).join('；')+`。共${candidates.length}组，包含当前配置；无效的参数组合会跳过。`;}
     catch(e){$('#tuning-grid').textContent=e.message;}
   }
-  function busy(value){$('#tuning-start').disabled=value;$('#tuning-management').disabled=value;$('#tuning-cancel').hidden=!value;$('#tuning-progress').hidden=!value;$('#tuning-export').disabled=value||!report;}
+  function busy(value){$('#tuning-start').disabled=value;$('#tuning-management').disabled=value||getContext().config.strategy!=='swing';$('#tuning-cancel').hidden=!value;$('#tuning-progress').hidden=!value;$('#tuning-export').disabled=value||!report;}
   async function apply(candidate){
     if((getContext().data)!==reportData){notify('行情已改变，请针对当前行情重新计算后再载入参数。');return;}
     if(!candidate.validation){notify('该候选的验证段未完成，请先查看资料或预热问题。');return;}
@@ -30,8 +36,8 @@ export function setupOptimization({getContext,setConfig,showView,runBacktest,not
     const note=!winner?'没有候选达到训练门槛；不推荐自动应用。可查看失败原因或单独研究某组参数。':!result.recommendation.changed?'训练优选仍是当前配置，本轮未找到更好的达标参数。':'已按训练质量选出候选，验证表现单独列出。';
     const delta=winner?.validationDelta;
     const changes=result.recommendation?.changes.map(x=>`<span class="tuning-change">${escape(changeNames[x.key])}：${escape(x.key==='management'?managementNames[x.before]:x.before)} → ${escape(x.key==='management'?managementNames[x.after]:x.after)}</span>`).join('')||'';
-    $('#tuning-results').innerHTML=`<p class="tuning-result-note">${escape(result.input.dataset)} · ${escape(sourceLabel({source:result.input.source,data:{metadata:{synthetic:result.input.synthetic}},quality:result.input.quality}))}<br>训练 ${escape(result.trainFrom)} — ${escape(result.trainTo)}<br>验证 ${escape(result.validationFrom)} — ${escape(result.validationTo)} · 从空仓开始，之前行情只用于预热<br>基准：${management?'仅底仓':'本轮当前参数'} · 资金 ¥${number(result.inputConfig.capital)}，五项费用和滑点固定</p><div class="tuning-summary"><div><span>可计算 / 训练达标</span><strong>${valid} / ${result.qualified} 组</strong></div><div><span>优选训练收益</span><strong>${percent(winner?.training.total)}</strong></div><div><span>优选验证收益</span><strong>${percent(winner?.validation?.total)}</strong></div><div><span>验证相对基准</span><strong>${Number.isFinite(delta)?number(delta*100)+' 个百分点':'—'}</strong></div></div><p class="tuning-result-note">${note}${winner?.validation?.total<=0?' 验证段收益未转正，不能据此认定策略有效。':''}${winner?.validationError?' 验证段失败：'+escape(winner.validationError):''}</p>${changes}${winner?.validation?'<div class="tuning-actions"><button id="tuning-apply" class="button primary">应用训练优选并回测验证段</button></div>':''}<div class="table-wrap"><table><thead><tr><th>${management?'仓位方案':'长均线 / ATR / 确认'}</th><th>训练收益 / 平仓</th><th>训练回撤 / 盈利因子</th><th>训练准入</th><th>验证收益 / 回撤</th><th>验证相对基准<br>百分点</th><th>操作</th></tr></thead><tbody>${result.rows.map((r,i)=>{
-      const label=management?managementNames[r.config.management]:`${r.config.dailySlow}日 / ${r.config.atrMult} / ${r.config.confirmationDays}日`,isBase=management?r.config.management==='base':r.isBaseline;
+    $('#tuning-results').innerHTML=`<p class="tuning-result-note">${escape(result.input.dataset)} · ${escape(sourceLabel({source:result.input.source,data:{metadata:{synthetic:result.input.synthetic}},quality:result.input.quality}))}<br>训练 ${escape(result.trainFrom)} — ${escape(result.trainTo)}<br>验证 ${escape(result.validationFrom)} — ${escape(result.validationTo)} · 从空仓开始，之前行情只用于预热<br>基准：${management?'仅底仓':'本轮当前参数'} · 资金 ¥${number(result.inputConfig.capital)}，五项费用和滑点固定</p><div class="tuning-summary"><div><span>可计算 / 训练达标</span><strong>${valid} / ${result.qualified} 组</strong></div><div><span>优选训练收益</span><strong>${percent(winner?.training.total)}</strong></div><div><span>优选验证收益</span><strong>${percent(winner?.validation?.total)}</strong></div><div><span>验证相对基准</span><strong>${Number.isFinite(delta)?number(delta*100)+' 个百分点':'—'}</strong></div></div><p class="tuning-result-note">${note}${winner?.validation?.total<=0?' 验证段收益未转正，不能据此认定策略有效。':''}${winner?.validationError?' 验证段失败：'+escape(winner.validationError):''}</p>${changes}${winner?.validation?'<div class="tuning-actions"><button id="tuning-apply" class="button primary">应用训练优选并回测验证段</button></div>':''}<div class="table-wrap"><table><thead><tr><th>${management?'仓位方案':strategyNames[result.inputConfig.strategy]+'参数'}</th><th>训练收益 / 平仓</th><th>训练回撤 / 盈利因子</th><th>训练准入</th><th>验证收益 / 回撤</th><th>验证相对基准<br>百分点</th><th>操作</th></tr></thead><tbody>${result.rows.map((r,i)=>{
+      const label=management?managementNames[r.config.management]:candidateLabel(r.config),isBase=management?r.config.management==='base':r.isBaseline;
       return `<tr class="${r===winner?'picked':''}"><td>${escape(label)}${isBase?'<br><small>基准</small>':''}${r===winner?'<br><small>训练优选</small>':''}</td>${r.error?`<td colspan="6">无法计算：${escape(r.error)}</td>`:`<td>${percent(r.training.total)} / ${r.training.closedTrades}笔</td><td>${percent(r.training.maxdd)} / ${number(r.training.profitFactor)}</td><td>${escape(r.quality.reason)}</td><td>${r.validation?percent(r.validation.total)+' / '+percent(r.validation.maxdd):escape(r.validationError||'未完成')}</td><td>${number(r.validationDelta*100)}</td><td>${r.validation?`<button class="load-params" data-tuning-row="${i}">查看验证回测</button>`:'—'}</td>`}</tr>`;
     }).join('')}</tbody></table></div><p class="help">基准训练收益 ${percent(baseline?.training?.total)}；验证收益 ${percent(baseline?.validation?.total)}。参数应用及单独查看不会下单。优化报告包含全部候选、失败原因、参数和行情指纹。</p>`;
     if($('#tuning-apply'))$('#tuning-apply').onclick=()=>apply(winner);

@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {defaults,parseCSV,backtest,demoData,demoMinuteData,detectTimeframe,resampleData,compareParameters} from '../dist/engine.mjs';
+import {defaults,parseCSV,backtest,demoData,demoMinuteData,detectTimeframe,resampleData,compareParameters,indicators,ema} from '../dist/engine.mjs';
 import {slots} from '../dist/data.mjs';
 const dailyMarket=(n=70)=>Array.from({length:n},(_,i)=>{const date=new Date(Date.UTC(2024,0,i+1)).toISOString().slice(0,10),p=10+i*.1;return {date,open:p,high:p+.1,low:p-.1,close:p,volume:100000,prev_close:i?p-.1:p,halted:0};});
 function minuteMarket(n=100){const result=[];let di=0,prev=10;for(let d=new Date('2024-01-01T00:00:00Z');di<n;d.setUTCDate(d.getUTCDate()+1)){if([0,6].includes(d.getUTCDay()))continue;const day=d.toISOString().slice(0,10);slots(5).forEach((time,bi)=>{const p=10+di*.04+bi*.0008;result.push({date:day+' '+time,open:p,high:p+.002,low:p-.002,close:p+.0004,volume:10000,prev_close:prev,halted:0});});prev=result.at(-1).close;di++;}return result;}
@@ -8,6 +8,14 @@ const config=d=>({...defaults,strategy:'ma',timeframe:'1d',taxMode:'manual',rule
 const minuteConfig=d=>({...defaults,strategy:'ma',timeframe:'5m',taxMode:'manual',rulesMode:'manual',from:d[48*2].date.slice(0,10),to:d.at(-1).date.slice(0,10),fast:2,slow:3,stop:0,take:0,management:'base',handling:0,regulatory:0,commission:0,minCommission:0,transfer:0,stamp:0,slippage:0,limit:0});
 
 test('all five strategies have deterministic finite results and preserve accounting',()=>{const d=demoData(),prices=new Map(d.map(r=>[r.date,r.close]));for(const strategy of['swing','ma','macd','rsi','boll']){const c={...defaults,strategy,timeframe:'1d'},r=backtest(d,c);assert.equal(r.curve.length,782);assert.ok(Number.isFinite(r.metrics.total));assert.ok(r.metrics.cash>=0);assert.equal(r.metrics.quantity%100,0);for(const p of r.curve)assert.ok(Math.abs(p.equity-(p.cash+p.quantity*prices.get(p.date)))<1e-7);assert.deepEqual(r,backtest(d,c));}});
+test('MACD default indicators reproduce 12/26/9, custom periods affect causal indicators and require their own warmup',()=>{
+ const d=dailyMarket(100),xs=d.map(r=>r.close),e12=ema(xs,12),e26=ema(xs,26),dif=e12.map((v,i)=>v-e26[i]),ind=indicators(d,defaults);assert.deepEqual(ind.dif,dif);assert.deepEqual(ind.dea,ema(dif,9));
+ const c={...config(d),strategy:'macd',macdFast:8,macdSlow:40,macdSignal:15};assert.notDeepEqual(indicators(d,c).dif,dif);assert.throws(()=>backtest(d,c),/预热/);assert.throws(()=>backtest(d,{...c,macdFast:40}),/MACD/);
+ const before=indicators(d,c),changed=structuredClone(d);for(let i=60;i<changed.length;i++)changed[i].close*=.8;assert.deepEqual(indicators(changed,c).dea.slice(0,60),before.dea.slice(0,60));
+});
+test('legacy nine-group validation preserves selected strategy for MACD, RSI and Bollinger',()=>{
+ const d=dailyMarket(100),base={...config(d),from:d[40].date};for(const strategy of ['macd','rsi','boll']){const report=compareParameters(d,{...base,strategy});assert.equal(report.rows.length,9);assert.ok(report.rows.every(r=>r.config.strategy===strategy));assert.ok(report.rows.some(r=>r.training));}
+});
 
 test('future bars do not change previous fills or equity',()=>{const d=dailyMarket(),c=config(d),r1=backtest(d,c),d2=structuredClone(d);for(let i=50;i<d2.length;i++)for(const key of['open','high','low','close','prev_close'])d2[i][key]*=.8;const r2=backtest(d2,c);assert.deepEqual(r1.curve.slice(0,15),r2.curve.slice(0,15));assert.deepEqual(r1.trades.filter(t=>t.date<d[50].date),r2.trades.filter(t=>t.date<d[50].date));});
 

@@ -2,10 +2,12 @@ import {auditBundle} from '../dist/quality.mjs';
 import {hostedSourceStatus,probeLixinger} from './hosted-sources.mjs';
 import {assembleStored} from './assemble.mjs';
 import {verifyRepairSnapshot} from '../dist/minute-repair.mjs';
+import {hostedLLM} from './llm.mjs';
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 export default {async fetch(request,env){
   const url=new URL(request.url);if(!url.pathname.startsWith('/api/'))return env.ASSETS.fetch(request);
   try{
+    if(url.pathname.startsWith('/api/llm/'))return await hostedLLM(request,env);
     if(url.pathname.startsWith('/api/research/repairs'))return reply({error:'第二分钟源核验需在本地部署版运行；托管网站不能连接通达信TCP。',code:'REPAIR_LOCAL_ONLY'},501);
     if(url.pathname==='/api/research/sources'&&request.method==='GET')return await hostedSourceStatus(env);
     if(url.pathname==='/api/sources/lixinger/probe'&&request.method==='POST')return await probeLixinger(request,env);

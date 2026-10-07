@@ -13,7 +13,26 @@ test('local candidates keep exact current values, fees and risk rules; bounds de
  assert.ok(search.candidates.length<=27);assert.equal(new Set(search.candidates.map(r=>r.id)).size,search.candidates.length);
  assert.ok(search.candidates.some(r=>r.config.dailySlow===249&&r.config.atrMult===.1&&r.config.confirmationDays===10));
  for(const row of search.candidates){assert.ok(row.config.dailySlow>c.dailyFast&&row.config.dailySlow<=250);assert.ok(row.config.atrMult>=0);assert.ok(row.config.confirmationDays<=10);for(const key of costKeys)assert.equal(row.config[key],c[key]);}
- assert.throws(()=>tuningCandidates(config,{dailySlowStep:0}),/步长/);assert.throws(()=>tuningCandidates({...config,strategy:'rsi'}),/大波段/);
+ assert.throws(()=>tuningCandidates(config,{dailySlowStep:0}),/步长/);
+});
+test('all strategy grids tune their own meaningful fields, keep baselines and filter coupled bounds',()=>{
+ const fields={swing:['dailySlow','atrMult','confirmationDays'],ma:['fast','slow'],macd:['macdFast','macdSlow','macdSignal'],rsi:['rsiPeriod','rsiBuy','rsiSell'],boll:['bbPeriod','bbMult']};
+ for(const strategy of Object.keys(fields)){
+  const c={...config,strategy},search=tuningCandidates(c);assert.equal(search.candidates.length,strategy==='ma'||strategy==='boll'?9:strategy==='swing'?18:27);
+  assert.ok(search.candidates.some(r=>fields[strategy].every(k=>r.config[k]===c[k])));
+  for(const row of search.candidates)for(const key of Object.keys(c).filter(k=>!fields[strategy].includes(k)))assert.equal(row.config[key],c[key]);
+ }
+ for(const c of [{...config,strategy:'ma',fast:29,slow:30},{...config,strategy:'macd',macdFast:25,macdSlow:26},{...config,strategy:'rsi',rsiBuy:49,rsiSell:50},{...config,strategy:'boll',bbMult:.1,bbPeriod:250}]){
+  const search=tuningCandidates(c);assert.ok(search.candidates.length>0&&search.candidates.length<=27);assert.equal(new Set(search.candidates.map(r=>r.id)).size,search.candidates.length);for(const row of search.candidates){assert.ok(row.config.fast<row.config.slow);assert.ok(row.config.macdFast<row.config.macdSlow);assert.ok(row.config.rsiBuy<row.config.rsiSell);}
+ }
+});
+test('held-out price changes cannot alter recommendation or training ranking for the other four strategies',()=>{
+ const input=data.slice(0,48*150),c={...config,from:input[48*50].date.slice(0,10),to:input.at(-1).date.slice(0,10)};
+ for(const strategy of ['ma','macd','rsi','boll']){
+  const first=tuneParameters(input,{...c,strategy}),changed=structuredClone(input);
+  for(const r of changed)if(r.date.slice(0,10)>=first.validationFrom)for(const key of ['open','high','low','close','prev_close'])r[key]*=.7;
+  const second=tuneParameters(changed,{...c,strategy});assert.deepEqual(second.recommendation,first.recommendation);assert.deepEqual(second.rows.map(r=>[r.id,r.training,r.quality]),first.rows.map(r=>[r.id,r.training,r.quality]));assert.ok(first.rows.every(r=>r.config.strategy===strategy));assert.equal(first.baseline.trainingDelta,0);assert.equal(first.baseline.validationDelta,0);
+ }
 });
 test('automatic tuning ranks on training only, preserves inputs and reproduces results under the same snapshot',()=>{
  const before=JSON.stringify(data),progress=[];const first=tuneParameters(data,config,{},p=>progress.push(p));

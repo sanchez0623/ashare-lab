@@ -1,22 +1,25 @@
 import {backtest,defaults,validate,qualityScore,compareManagement} from './engine.mjs';
+import {parameterSchema,tuningSpecs,tuningKeys} from './parameter-schema.mjs';
 
-export const tuningVersion='1';
-const keys=['dailySlow','atrMult','confirmationDays'];
-const same=(a,b)=>keys.every(k=>a[k]===b[k]);
+export const tuningVersion='2';
+const same=(a,b)=>tuningKeys(a.strategy).every(k=>a[k]===b[k]);
 const clamp=(v,min,max)=>Math.min(max,Math.max(min,v));
 const around=(v,step,min,max)=>[...new Set([v,clamp(Number((v-step).toFixed(6)),min,max),clamp(Number((v+step).toFixed(6)),min,max)])];
 
 export function tuningCandidates(config,options={}){
   const c={...defaults,...config};validate(c);
-  if(c.strategy!=='swing')throw Error('自动微调目前针对大波段趋势策略，请先在策略配置中选择大波段趋势。');
-  const steps={dailySlowStep:options.dailySlowStep??5,atrStep:options.atrStep??.25,confirmationStep:options.confirmationStep??1};
-  if(!Number.isInteger(steps.dailySlowStep)||steps.dailySlowStep<1||steps.dailySlowStep>50||!Number.isFinite(steps.atrStep)||steps.atrStep<.05||steps.atrStep>2||!Number.isInteger(steps.confirmationStep)||steps.confirmationStep<1||steps.confirmationStep>3)throw Error('微调步长无效：均线1–50日、ATR 0.05–2、确认1–3日。');
-  const grid={dailySlow:around(c.dailySlow,steps.dailySlowStep,2,250).filter(v=>v>c.dailyFast),atrMult:around(c.atrMult,steps.atrStep,0,10),confirmationDays:around(c.confirmationDays,steps.confirmationStep,1,10)};
-  const candidates=[];
-  for(const dailySlow of grid.dailySlow)for(const atrMult of grid.atrMult)for(const confirmationDays of grid.confirmationDays){
-    const candidate={...c,dailySlow,atrMult,confirmationDays};
-    candidates.push({id:`${dailySlow}/${atrMult}/${confirmationDays}`,config:candidate,distance:Math.abs(dailySlow-c.dailySlow)/steps.dailySlowStep+Math.abs(atrMult-c.atrMult)/steps.atrStep+Math.abs(confirmationDays-c.confirmationDays)/steps.confirmationStep});
+  const specs=tuningSpecs[c.strategy],steps={},grid={},candidates=[];
+  for(const [key,option,fallback,min,max]of specs){
+    const step=options[option]??fallback,s=parameterSchema[key];
+    if(!Number.isFinite(step)||step<min||step>max||Math.abs(step/min-Math.round(step/min))>1e-6)throw Error(s.label+'微调步长无效：'+min+'–'+max);
+    steps[option]=step;grid[key]=around(c[key],step,s.min,s.max);
   }
+  function generate(i,values){
+    if(i<specs.length){const key=specs[i][0];for(const v of grid[key])generate(i+1,{...values,[key]:v});return;}
+    const candidate={...c,...values};try{validate(candidate);}catch{return;}
+    candidates.push({id:tuningKeys(c.strategy).map(k=>candidate[k]).join('/'),config:candidate,distance:specs.reduce((sum,[k,o])=>sum+Math.abs(candidate[k]-c[k])/steps[o],0)});
+  }
+  generate(0,{});
   return {grid,steps,candidates};
 }
 export function tuneParameters(data,config,options={},progress=()=>{}){
@@ -35,7 +38,7 @@ export function tuneParameters(data,config,options={},progress=()=>{}){
   }
   rows.sort((a,b)=>Number(!!a.error)-Number(!!b.error)||Number(!!b.quality?.eligible)-Number(!!a.quality?.eligible)||(b.quality?.score??-Infinity)-(a.quality?.score??-Infinity)||a.distance-b.distance);
   // Freeze the winner BEFORE inspecting any held-out metrics or failures.
-  const winner=rows.find(r=>r.quality?.eligible),recommendation=winner?{id:winner.id,config:{...winner.config},changed:!winner.isBaseline,changes:keys.filter(k=>winner.config[k]!==c[k]).map(key=>({key,before:c[key],after:winner.config[key]}))}:null;
+  const winner=rows.find(r=>r.quality?.eligible),recommendation=winner?{id:winner.id,config:{...winner.config},changed:!winner.isBaseline,changes:tuningKeys(c.strategy).filter(k=>winner.config[k]!==c[k]).map(key=>({key,before:c[key],after:winner.config[key]}))}:null;
   for(let i=0;i<rows.length;i++){
     const row=rows[i];if(!row.error)try{row.validation=backtest(data,{...row.config,from:validationFrom}).metrics;}catch(e){row.validationError=e.message;}
     progress({phase:'validation',completed:i+1,total:rows.length});
