@@ -55,7 +55,7 @@ test('147 inherited volume mismatches expose every date and preserve the strict 
   const before=canonical(bad);
   assert.throws(()=>assembleBundles(bad,input),e=>{
     assert.equal(e.code,'ASSEMBLY_ADMISSION');const d=e.details.reconciliation;
-    assert.deepEqual(d.summary,{failedChecks:147,affectedDays:147,priceChecks:0,volumeChecks:147,sourceMismatchDays:147,assemblyOnlyDays:0});
+    assert.deepEqual(d.summary,{failedChecks:147,affectedDays:147,priceChecks:0,openChecks:0,highChecks:0,lowChecks:0,volumeChecks:147,sourceMismatchDays:147,assemblyOnlyDays:0});
     assert.equal(d.rows.length,147);assert.ok(d.rows.every(r=>r.bars===48&&r.volume.minute===960000&&r.volume.daily===480000&&r.volume.difference===480000&&r.volume.ratio===2&&r.volume.tolerance===2400&&r.parents[0].snapshotId===bad[0].id));
     assert.match(e.message,/原快照/);assert.match(e.message,/147 日/);return true;
   });

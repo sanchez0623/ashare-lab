@@ -1,10 +1,12 @@
 import {auditBundle} from '../dist/quality.mjs';
 import {hostedSourceStatus,probeLixinger} from './hosted-sources.mjs';
 import {assembleStored} from './assemble.mjs';
+import {verifyRepairSnapshot} from '../dist/minute-repair.mjs';
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 export default {async fetch(request,env){
   const url=new URL(request.url);if(!url.pathname.startsWith('/api/'))return env.ASSETS.fetch(request);
   try{
+    if(url.pathname.startsWith('/api/research/repairs'))return reply({error:'第二分钟源核验需在本地部署版运行；托管网站不能连接通达信TCP。',code:'REPAIR_LOCAL_ONLY'},501);
     if(url.pathname==='/api/research/sources'&&request.method==='GET')return await hostedSourceStatus(env);
     if(url.pathname==='/api/sources/lixinger/probe'&&request.method==='POST')return await probeLixinger(request,env);
     if(!env.BUCKET)return reply({error:'行情仓库暂不可用，请稍后重试；当前文件仍可保留在浏览器中。'},503);
@@ -35,6 +37,7 @@ export default {async fetch(request,env){
       let bundle;try{bundle=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{return reply({error:'JSON 或 UTF-8 编码无效'},400);}
       if(bundle.bars?.length>120000)return reply({error:'单快照最多 120,000 根行情，较长历史请分段采集'},400);
       let report;try{report=auditBundle(bundle);}catch(e){return reply({error:e.message},400);}
+      if(bundle.metadata?.minuteRepair)await verifyRepairSnapshot(bundle);
       const digest=await crypto.subtle.digest('SHA-256',bytes),id=[...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');
       const key='manifests/'+id+'.json',existing=await env.BUCKET.get(key);if(existing)return reply({...await existing.json(),reused:true});
       const metadata=bundle.metadata??{};const manifest={id,symbol:metadata.symbol??'',name:metadata.name??'',board:metadata.board,timeframe:metadata.timeframe,source:metadata.source??'uploaded',syncedAt:new Date().toISOString(),bytes:size,report};

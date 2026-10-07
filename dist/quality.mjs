@@ -29,7 +29,7 @@ export function auditBundle(b,{scope='hs300'}={}){
   if(bad)add('BAR_INVALID','无效价格、时间或分钟网格',bad);if(dups)add('DUPLICATES','重复时间',dups);if(unordered)add('ORDER','行情未严格递增',unordered);
   const dm=new Map(daily.map(d=>[d.date,d]));if(dm.size!==daily.length)add('DAILY_DUPLICATES','逐日元数据重复');
   const sessions=calendar.filter(d=>d>=range.from&&d<=range.to&&(!m.listedDate||d>=m.listedDate)&&(!m.delistedDate||d<=m.delistedDate));
-  const missing=[],short=[],st=[],halts=[],references=[],mismatch=[],factors=[];let completeSessions=0,suspendedSessions=0;
+  const missing=[],short=[],st=[],halts=[],references=[],mismatch=[],extremes=[],factors=[];let completeSessions=0,suspendedSessions=0;
   for(const day of sessions){
     const d=dm.get(day),rows=byDay.get(day)??[];
     if(!d){missing.push(day);const n=m.timeframe==='1d'?1:grid.size;if(rows.length&&rows.length!==n)short.push(day);continue;}
@@ -43,8 +43,10 @@ export function auditBundle(b,{scope='hs300'}={}){
     if(!rows.length)missing.push(day);else if(rows.length!==n||m.timeframe!=='1d'&&rows.some((r,i)=>r.date.slice(11)!==[...grid][i]))short.push(day);else completeSessions++;
     if(!Number.isFinite(d.close)||d.close<=0||rows.length&&Math.abs(rows.at(-1).close-d.close)>0.011)mismatch.push(day);
     if(d.volume!==undefined&&rows.length===n&&Math.abs(rows.reduce((s,r)=>s+r.volume,0)-d.volume)>Math.max(100,d.volume*.005))mismatch.push(day+' 成交量');
+    if(rows.length===n){for(const [field,value,label] of [['open',rows[0].open,'开盘价'],['high',Math.max(...rows.map(r=>r.high)),'最高价'],['low',Math.min(...rows.map(r=>r.low)),'最低价']])if(Number.isFinite(d[field])&&Math.abs(value-d[field])>.011)extremes.push(day+' '+label);}
   }
   for(const [code,label,xs] of [['MISSING_DAYS','缺失整个交易日或逐日资料',missing],['MINUTE_GAPS','分钟根数/网格不完整',short],['ST_HISTORY','缺少开盘已知的历史 ST 状态',st],['HALT_HISTORY','停牌状态缺失或冲突',halts],['REFERENCE','缺少交易所当日昨收/除权参考价',references],['CAUSAL_FACTOR','缺少事件生效当日的连续因子',factors],['DAILY_CROSSCHECK','分钟与独立日线校验不符',mismatch]])if(xs.length)add(code,label,xs.length,xs);
+  if(extremes.length)add('DAILY_OHLC_CROSSCHECK','分钟与独立日线开高低价校验不符',extremes.length,extremes);
   if(!sessions.length)add('SESSIONS','请求区间没有有效交易日');
   const outOfScope=bars.filter(r=>dayOf(r)<range.from||dayOf(r)>range.to);if(outOfScope.length)add('OUTSIDE_AUDIT','行情超出已声明审计区间；不得使用未经审计的预热数据',outOfScope.length);
   const calendarSet=new Set(calendar);const extras=[...byDay.keys()].filter(d=>d>=range.from&&d<=range.to&&!calendarSet.has(d));if(extras.length)add('NON_SESSION','非交易日出现行情',extras.length,extras);
@@ -80,7 +82,7 @@ export function auditBundle(b,{scope='hs300'}={}){
     }if(d.halted!==1)prev=d;
   }
   const failed=issues.reduce((s,i)=>s+i.count,0);
-  return {version:'3.1',scope,membershipChecked:scope==='hs300',status:failed?'blocked':'passed',label:failed?(scope==='single-security'?'不可单标的回测':'不可正式回测'):m.synthetic?'合成数据包 · 结构校验通过':scope==='single-security'?'单标的数据校验通过 · 未核验沪深300成员':'结构与覆盖校验通过',issues,requested:range,actual:{from:bars[0]?.date??null,to:bars.at(-1)?.date??null,bars:bars.length},sessions:sessions.length,completeSessions,suspendedSessions,warning:'校验只证明所声明数据源内的结构与覆盖；不能证明供应商从未漏报、历史可得性或股票池无幸存者偏差。'+(scope==='single-security'?' 当前仅研究指定证券，不要求也不证明历史沪深300成员资格。':'')};
+  return {version:'3.2',scope,membershipChecked:scope==='hs300',status:failed?'blocked':'passed',label:failed?(scope==='single-security'?'不可单标的回测':'不可正式回测'):m.synthetic?'合成数据包 · 结构校验通过':scope==='single-security'?'单标的数据校验通过 · 未核验沪深300成员':'结构与覆盖校验通过',issues,requested:range,actual:{from:bars[0]?.date??null,to:bars.at(-1)?.date??null,bars:bars.length},sessions:sessions.length,completeSessions,suspendedSessions,warning:'校验只证明所声明数据源内的结构与覆盖；不能证明供应商从未漏报、历史可得性或股票池无幸存者偏差。'+(scope==='single-security'?' 当前仅研究指定证券，不要求也不证明历史沪深300成员资格。':'')};
 }
 export function prepareBundle(b,{strict=true,scope='hs300'}={}){
   const report=auditBundle(b,{scope});if(strict&&report.status!=='passed')throw Error('数据准入失败：'+report.issues.slice(0,4).map(x=>x.message+'（'+x.count+'）').join('；'));

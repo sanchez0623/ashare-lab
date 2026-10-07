@@ -4,6 +4,7 @@ import {defaults,demoData,demoMinuteData,parseCSV,backtest,compareParameters,com
 import {auditBundle} from './quality.mjs';
 import {requiredWarmupSessions} from './research-input.mjs';
 import {reconciliationReport} from './reconciliation.mjs';
+import {setupMinuteRepair} from './minute-repair-ui.mjs';
 import {boardNames} from './rules.mjs';
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const names={swing:'大波段趋势策略',ma:'双均线策略',macd:'MACD 动量策略',rsi:'RSI 超卖反弹',boll:'布林带均值回归'};
@@ -16,6 +17,7 @@ const backtestSnapshots=new Map();let snapshotsLoading=false;
 const bundleMode=b=>b.metadata?.collectionPurpose==='market-data-only'||b.metadata?.universe==='SINGLE_SECURITY'?'single':'formal';
 const selectedAudit=b=>auditBundle(b,{scope:$('#data-mode').value==='single'?'single-security':'hs300'});
 let optimization;
+let repairUI;
 let reconciliation;
 let result,reportData,page=0,chartMode='nav',activeTab='trades',dirty=false,toastTimer,importedData,importedName;
 let history=[];try{const h=JSON.parse(localStorage.getItem('qingheng-history')||'[]');if(Array.isArray(h))history=h.filter(x=>x&&x.config&&x.metrics&&x.period).slice(0,20);}catch{}
@@ -93,20 +95,22 @@ function clearReconciliation(){reconciliation=null;const el=$('#backtest-reconci
 function showReconciliation(error){
   reconciliation=error.details?.reconciliation;
   const symbol=$('#backtest-symbol').value.trim();
-  if(!reconciliation&&activeBundle&&symbol===activeBundle.metadata.symbol&&qualityReport?.issues.some(i=>i.code==='DAILY_CROSSCHECK'))reconciliation=reconciliationReport(activeBundle,qualityReport,activeSnapshotId?[{id:activeSnapshotId,bundle:activeBundle}]:[]);
+  if(!reconciliation&&activeBundle&&symbol===activeBundle.metadata.symbol&&qualityReport?.issues.some(i=>['DAILY_CROSSCHECK','DAILY_OHLC_CROSSCHECK'].includes(i.code)))reconciliation=reconciliationReport(activeBundle,qualityReport,activeSnapshotId?[{id:activeSnapshotId,bundle:activeBundle}]:[]);
   if(!reconciliation)return;
   let el=$('#backtest-reconciliation');if(!el){el=document.createElement('div');el.id='backtest-reconciliation';el.className='reconciliation';$('#config-status').after(el);}el.hidden=false;el.replaceChildren();
-  const summary=document.createElement('p'),s=reconciliation.summary;summary.textContent=`${s.affectedDays} 个交易日 · 收盘价 ${s.priceChecks} 项 · 成交量 ${s.volumeChecks} 项${s.sourceMismatchDays?'；'+s.sourceMismatchDays+' 日的差异已存在于原快照':''}。`;el.append(summary);
-  const list=document.createElement('ul');for(const row of reconciliation.rows.slice(0,5)){const li=document.createElement('li');li.textContent=row.date+' · '+row.metrics.map(k=>`${k==='close'?'收盘价':'成交量/股'}：分钟 ${num(row[k].minute,k==='close'?4:0)}，日线 ${num(row[k].daily,k==='close'?4:0)}，差 ${num(row[k].difference,k==='close'?4:0)}`).join('；');list.append(li);}el.append(list);
+  const summary=document.createElement('p'),s=reconciliation.summary;summary.textContent=`${s.affectedDays} 个交易日 · 收盘价 ${s.priceChecks} 项 · 成交量 ${s.volumeChecks} 项${s.openChecks||s.highChecks||s.lowChecks?` · 开盘 ${s.openChecks??0} / 最高 ${s.highChecks??0} / 最低 ${s.lowChecks??0} 项`:''}${s.sourceMismatchDays?'；'+s.sourceMismatchDays+' 日的差异已存在于原快照':''}。`;el.append(summary);
+  const list=document.createElement('ul'),labels={open:'开盘价',high:'最高价',low:'最低价',close:'收盘价',volume:'成交量/股'};for(const row of reconciliation.rows.slice(0,5)){const li=document.createElement('li');li.textContent=row.date+' · '+row.metrics.map(k=>`${labels[k]}：分钟 ${num(row[k].minute,k==='volume'?0:4)}，日线 ${num(row[k].daily,k==='volume'?0:4)}，差 ${num(row[k].difference,k==='volume'?0:4)}`).join('；');list.append(li);}el.append(list);
   const button=document.createElement('button');button.type='button';button.className='text-button';button.textContent='下载量价核验报告';button.onclick=()=>download(reconciliation.symbol+'-量价核验报告.json',JSON.stringify(reconciliation,null,2),'application/json');el.append(button);
+  const repair=document.createElement('button');repair.type='button';repair.className='text-button';repair.textContent='查看第二源核验 / 修复';repair.onclick=()=>{showView('data');repairUI?.refresh();$('#minute-repair-panel').scrollIntoView({block:'center',behavior:'smooth'});};el.append(repair);
 }
 function renderQuality(){
+  repairUI?.context();
   const el=$('#quality-status');if(!activeBundle){el.innerHTML=source==='demo'?'<strong>合成演示 · 不属于真实行情验证</strong><p class="help">演示日历只排除周末，仅用于体验策略与成交流程。</p>':'<strong class="quality-blocked">CSV 完整性未验证</strong><p class="help">无法核对整日缺失、历史 ST、公司行动和因子。当时是否沪深 300 成分股也需独立资料。只可做探索研究。</p>';return;}
   const q=qualityReport,m=activeBundle.metadata;el.innerHTML=`<div class="quality-summary"><span class="quality-${q.status}">${esc(q.label)}</span><span>${esc(boardNames[m.board]||'板块缺失')} · ${esc(m.symbol)}</span><span>${q.completeSessions} / ${q.sessions} 个完整交易日</span><span>${q.suspendedSessions} 个已确认停牌日</span></div><p class="help">请求含预热：${esc(q.requested.from)} — ${esc(q.requested.to)}<br>实际返回：${esc(q.actual.from||'无')} — ${esc(q.actual.to||'无')} · ${num(q.actual.bars,0)} 根</p>${q.issues.length?'<ul class="quality-issues">'+q.issues.map(x=>`<li><strong>${esc(x.message)}（${x.count}）</strong>${x.samples.length?'<small>'+esc(x.samples.join('、'))+'</small>':''}</li>`).join('')+'</ul>':'<p>逐日网格、历史状态、独立日线与除权因子链校验通过。</p>'}<p class="help">${esc(q.warning)}</p>`;
 }
 async function loadBundle(b,name,persist=false,snapshotId=null){
   if(!b?.bars?.length)throw Error('数据包没有可预览行情。');$('#data-mode').value=bundleMode(b);activeSnapshotId=snapshotId;importedSnapshotId=snapshotId;const q=selectedAudit(b);if(!b.bars.length)throw Error('数据包没有可预览行情。');activeBundle=b;importedBundle=b;qualityReport=q;data=b.bars;importedData=data;dataName=b.metadata.symbol+' · '+(b.metadata.name||name);importedName=dataName;source='bundle';$('#backtest-symbol').value=b.metadata.symbol;let opt=$('#dataset option[value="import"]');if(!opt){opt=document.createElement('option');opt.value='import';$('#dataset').append(opt);}opt.textContent=b.metadata.symbol+' · 已载入数据包';$('#dataset').value=snapshotId&&backtestSnapshots.has(snapshotId)?'snapshot:'+snapshotId:'import';$('#board').value=b.metadata.board||'main';$('#board').disabled=true;setImportPeriod();updateSource();renderData();renderQuality();markDirty();$('#import-status').textContent=q.label+'；'+data.length+' 根行情。';
-  if(persist){try{const saved=await api('/api/data/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});activeSnapshotId=saved.id;importedSnapshotId=saved.id;$('#import-status').textContent='已持久保存 · 快照 '+saved.id.slice(0,12)+' · '+q.label;await refreshWarehouse();await refreshBacktestSnapshots();updateSource();}catch(e){$('#import-status').textContent=e.message+' 当前文件仍在页面内，请保留本地副本。';toast(e.message);}}
+  if(persist){try{const saved=await api('/api/data/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});activeSnapshotId=saved.id;importedSnapshotId=saved.id;$('#import-status').textContent='已持久保存 · 快照 '+saved.id.slice(0,12)+' · '+q.label;await refreshWarehouse();await refreshBacktestSnapshots();updateSource();repairUI?.context();}catch(e){$('#import-status').textContent=e.message+' 当前文件仍在页面内，请保留本地副本。';toast(e.message);}}
 }
 function renderSnapshotOptions(){
   const select=$('#dataset'),current=select.value;select.querySelectorAll('option[data-saved-snapshot]').forEach(o=>o.remove());
@@ -125,7 +129,7 @@ async function resolveBacktestSymbol(){
   const covers=r=>r?.from<=c.from&&r?.to>=c.to;
   if(activeBundle?.metadata?.symbol===symbol&&covers(activeBundle.metadata.requested))return;
   await refreshBacktestSnapshots();
-  const matches=[...backtestSnapshots.values()].filter(x=>x.symbol===symbol&&covers(x.report?.requested)).sort((a,b)=>b.syncedAt.localeCompare(a.syncedAt));
+  const matches=[...backtestSnapshots.values()].filter(x=>x.symbol===symbol&&covers(x.report?.requested)).sort((a,b)=>Number(!!b.minuteRepair)-Number(!!a.minuteRepair)||Number(b.report?.status==='passed')-Number(a.report?.status==='passed')||b.syncedAt.localeCompare(a.syncedAt));
   let id=matches[0]?.id;
   if(!id){
     const warmupSessions=requiredWarmupSessions(c),lookback=new Date(Date.parse(c.from+'T00:00:00Z')-Math.max(365,warmupSessions*4)*86400000).toISOString().slice(0,10);
@@ -158,6 +162,7 @@ $('#quality-export').onclick=()=>{download('行情完整性报告.json',JSON.str
 $('#bundle-template').onclick=async()=>{try{const b=await fetch('./bundle-example.json').then(r=>r.json());download('完整数据包-合成示例.json',JSON.stringify(b,null,2),'application/json');toast('示例为合成数据，不是可用的真实股票行情。');}catch(e){toast('示例加载失败');}};
 let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(renderChart,100);});
 optimization=setupOptimization({getContext:()=>({data:activeBundle??data,config:config(),name:dataName,source,snapshotId:activeSnapshotId,quality:qualityReport}),setConfig,showView,runBacktest:run,notify:toast});
+repairUI=setupMinuteRepair({getContext:()=>({bundle:activeBundle,snapshotId:activeSnapshotId}),api,loadSnapshot:async id=>{await loadBundle(await api('/api/data/bundle?id='+id),'第二源修复快照',false,id);await refreshWarehouse();},notify:toast});
 selectStrategy('swing');updateSource();renderData();run(false);
 
 function renderTPairs(){const rows=result.tPairs;return '<div class="optimizer-intro"><h3>T 配对审计</h3><p>超时或止损会亏损；未配对不计作盈利。股息和送转按实际登记库存进入整段波段盈亏。</p></div><div class="table-wrap"><table><thead><tr><th>方向</th><th>开 T</th><th>结束</th><th>股数</th><th>净价差 / 元</th><th>状态 / 原因</th></tr></thead><tbody>'+ (rows.length?rows.slice(-30).reverse().map(t=>`<tr><td>${t.direction==='positive'?'正 T':'反 T'}</td><td>${t.start}</td><td>${t.end}</td><td>${num(t.quantity,0)}</td><td class="${cls(t.pnl)}">${num(t.pnl)}</td><td>${t.status==='paired'?'已配对':'未配对'} · ${esc(t.reason)}</td></tr>`).join(''):'<tr><td colspan="6" class="empty">本方案没有 T 配对。需要 5 / 15 分钟、有效日线趋势、可卖旧仓与足够的费后价差。</td></tr>')+'</tbody></table></div>';}

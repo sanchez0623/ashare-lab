@@ -5,6 +5,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createHash,randomUUID} from 'node:crypto';
 import {Readable} from 'node:stream';
 import {ResearchManager} from '../server/research.mjs';
+import {MinuteRepairManager} from '../server/minute-repair.mjs';
 
 const projectRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const validKey=key=>/^(snapshots|manifests)\/[a-f0-9]{64}\.json$/.test(key);
@@ -45,10 +46,11 @@ export async function loadBuiltWorker(root=projectRoot){
   if(typeof worker?.fetch!=='function')throw Object.assign(Error('后台构建文件入口无效：'+entry+'；需要导出可调用的 fetch。'),{code:'BUILD_ENTRY_INVALID'});
   return worker;
 }
-export async function startLocal({port=8080,dataDir=path.join(projectRoot,'.local-data'),assetsDir=path.join(projectRoot,'dist/client'),worker,researchOptions={}}={}){
+export async function startLocal({port=8080,dataDir=path.join(projectRoot,'.local-data'),assetsDir=path.join(projectRoot,'dist/client'),worker,researchOptions={},repairOptions={}}={}){
   if(!worker)worker=await loadBuiltWorker();
   await mkdir(dataDir,{recursive:true});const env={BUCKET:new FileBucket(path.join(dataDir,'warehouse')),ASSETS:fileAssets(assetsDir)};
   const research=await new ResearchManager({...researchOptions,root:path.join(dataDir,'research'),bucket:env.BUCKET}).init();
+  let repairs;try{repairs=await new MinuteRepairManager({...repairOptions,root:path.join(dataDir,'research','minute-repairs'),bucket:env.BUCKET,python:()=>research.python()}).init();}catch(e){await research.close();throw e;}
   const server=http.createServer(async(req,res)=>{
     const localPort=server.address().port,host=req.headers.host?.toLowerCase();
     if(![`127.0.0.1:${localPort}`,`localhost:${localPort}`].includes(host)){res.writeHead(403,{'content-type':'text/plain; charset=utf-8'});res.end('只接受本机访问');return;}
@@ -56,12 +58,13 @@ export async function startLocal({port=8080,dataDir=path.join(projectRoot,'.loca
       if(!['GET','HEAD','POST'].includes(req.method)){res.writeHead(405);res.end();return;}
       const body=['GET','HEAD'].includes(req.method)?undefined:await readBody(req);
       const request=new Request(new URL(req.url,'http://'+host),{method:req.method,headers:req.headers,body});
-      const response=await (new URL(request.url).pathname.startsWith('/api/research/')?research.fetch(request):worker.fetch(request,env));res.writeHead(response.status,Object.fromEntries(response.headers));
+      const pathname=new URL(request.url).pathname;
+      const response=await (pathname.startsWith('/api/research/repairs')?repairs.fetch(request):pathname.startsWith('/api/research/')?research.fetch(request):worker.fetch(request,env));res.writeHead(response.status,Object.fromEntries(response.headers));
       if(response.body&&req.method!=='HEAD')Readable.fromWeb(response.body).pipe(res);else res.end();
     }catch(e){res.writeHead(e.status??500,{'content-type':'application/json; charset=utf-8','connection':'close'});res.end(JSON.stringify({error:e.status?e.message:'本地服务处理失败，请检查启动窗口日志'}));if(!e.status)console.error(e.message);}
   });
-  const close=server.close.bind(server);server.close=callback=>{research.close().then(()=>close(callback),e=>callback?.(e));return server;};server.research=research;
-  try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});}catch(e){await research.close();throw e;}return server;
+  const close=server.close.bind(server);server.close=callback=>{Promise.all([repairs.close(),research.close()]).then(()=>close(callback),e=>callback?.(e));return server;};server.research=research;server.repairs=repairs;
+  try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});}catch(e){await Promise.all([repairs.close(),research.close()]);throw e;}return server;
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const major=Number(process.versions.node.split('.')[0]);if(major<22){console.error('需要 Node.js 22 或更高版本，推荐 Node.js 24 LTS。');process.exit(1);}
