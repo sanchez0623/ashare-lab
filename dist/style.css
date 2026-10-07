@@ -21,3 +21,9 @@ body{font-size:1rem}.config-content label,.section-label{font-size:.875rem}.two-
 .top-info .text-button{font-weight:600}@media(max-width:760px){.top-info>span{display:none}}
 
 .tuning-thresholds{grid-column:1/-1;font-size:14px}.tuning-thresholds summary{cursor:pointer;color:#0f766e;padding:8px 0}.tuning-thresholds label{margin:14px 0}.tuning-controls .help{white-space:normal}#tuning-context{white-space:pre-line}
+
+/* Let native controls grow with their text and padding across every form. */
+.layout input,.layout select{height:auto;min-height:2.75rem;padding-block:.625rem;line-height:1.5}
+@media(max-width:760px){.layout input,.layout select{font-size:1rem}.sidebar .nav{gap:0}}
+@media(max-width:560px){.research-form{grid-template-columns:minmax(0,1fr)}.research-form button{grid-column:auto;width:100%}}
+@media(max-width:380px){.config-content>.two-fields,.strategy-params.two-fields,.strategy-params>.two-fields{grid-template-columns:minmax(0,1fr)}}
