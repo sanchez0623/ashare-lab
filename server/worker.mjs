@@ -1,5 +1,6 @@
 import {auditBundle} from '../dist/quality.mjs';
 import {hostedSourceStatus,probeLixinger} from './hosted-sources.mjs';
+import {assembleStored} from './assemble.mjs';
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 export default {async fetch(request,env){
   const url=new URL(request.url);if(!url.pathname.startsWith('/api/'))return env.ASSETS.fetch(request);
@@ -13,6 +14,15 @@ export default {async fetch(request,env){
     if(url.pathname==='/api/data/bundle'&&request.method==='GET'){
       const id=url.searchParams.get('id');if(!/^[a-f0-9]{64}$/.test(id??''))return reply({error:'快照编号无效'},400);
       const obj=await env.BUCKET.get('snapshots/'+id+'.json');return obj?new Response(obj.body,{headers:{'content-type':'application/json; charset=utf-8','cache-control':'private, max-age=31536000, immutable','etag':obj.httpEtag}}):reply({error:'快照不存在'},404);
+    }
+    if(url.pathname==='/api/data/assemble'&&request.method==='POST'){
+      const origin=request.headers.get('origin');if(origin&&origin!==url.origin)return reply({error:'只接受本站写入'},403);
+      if(!request.headers.get('content-type')?.startsWith('application/json'))return reply({error:'需要JSON合并参数'},415);
+      const reader=request.body?.getReader();if(!reader)return reply({error:'参数为空'},400);let size=0;const chunks=[];
+      while(true){const x=await reader.read();if(x.done)break;size+=x.value.byteLength;if(size>20000){await reader.cancel();return reply({error:'合并参数超过20KB'},413);}chunks.push(x.value);}
+      const bytes=new Uint8Array(size);let offset=0;for(const x of chunks){bytes.set(x,offset);offset+=x.length;}
+      let input;try{input=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{return reply({error:'合并参数JSON无效'},400);}
+      const saved=await assembleStored(env.BUCKET,input);return reply(saved,saved.reused?200:201);
     }
     if(url.pathname==='/api/data/ingest'&&request.method==='POST'){
       // The platform dispatch authenticates this owner-private Site before entry.
@@ -34,5 +44,5 @@ export default {async fetch(request,env){
       return reply(manifest,201);
     }
     return reply({error:'接口或方法不存在'},404);
-  }catch(e){console.error('data warehouse request failed',url.pathname,e.message);return reply({error:'行情仓库操作失败，未确认保存成功。保留文件后重试。'},503);}
+  }catch(e){if(e.status)return reply({error:e.message,code:e.code,details:e.details},e.status);console.error('data warehouse request failed',url.pathname,e.message);return reply({error:'行情仓库操作失败，未确认保存成功。保留文件后重试。'},503);}
 }};

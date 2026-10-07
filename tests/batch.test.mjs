@@ -21,7 +21,7 @@ test('batch parser preserves leading zeroes, accepts common delimiters, deduplic
 });
 test('all symbols and shared configuration validate before any durable task is submitted',async()=>{
  let calls=0;const c=await setup(async()=>{calls++;throw Error('must not collect');});
- try{for(const input of [{...base(),symbols:'600519,900001'},{...base(),symbols:'600519,123'},{...base(),from:'2024-02-30'},{...base(),config:{timeframe:'1d'}},{...base(),requestId:'../bad'}])await assert.rejects(c.manager.createBatch(input));assert.equal(c.manager.jobs.size,0);assert.equal(c.manager.batches.size,0);assert.equal(calls,0);assert.deepEqual(await readdir(path.join(c.root,'jobs')),[]);}
+ try{for(const input of [{...base(),symbols:'600519,900001'},{...base(),symbols:'600519,123'},{...base(),from:'2024-02-30'},{...base(),config:{timeframe:'30m'}},{...base(),requestId:'../bad'}])await assert.rejects(c.manager.createBatch(input));assert.equal(c.manager.jobs.size,0);assert.equal(c.manager.batches.size,0);assert.equal(calls,0);assert.deepEqual(await readdir(path.join(c.root,'jobs')),[]);}
  finally{await cleanup(c);}
 });
 test('batch submission is idempotent, per-stock requests are frozen, and one stock failure does not block the next',async()=>{

@@ -15,7 +15,7 @@ const path=require('node:path'),os=require('node:os');
  try{
   const base='http://127.0.0.1:'+server.address().port,page=await browser.newPage({viewport:{width:1440,height:1050}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
   const from=b.calendar[80],to=b.calendar.at(-1);
-  const response=await page.request.post(base+'/api/research/jobs',{data:{symbol:'001389',purpose:'collect',rangeMode:'custom',from,to,config:{timeframe:'5m',dailyFast:5,dailySlow:20,exitPeriod:5,breakout:2,confirmationDays:1,atrPeriod:5,maxExtensionATR:10,fast:2,slow:3,management:'base'}}});assert.equal(response.status(),202);const job=await response.json();
+  const response=await page.request.post(base+'/api/research/jobs',{data:{symbol:'001389',purpose:'collect',rangeMode:'custom',from,to,config:{timeframe:'15m',dailyFast:5,dailySlow:20,exitPeriod:5,breakout:2,confirmationDays:1,atrPeriod:5,maxExtensionATR:10,fast:2,slow:3,management:'base'}}});assert.equal(response.status(),202);const job=await response.json();
   for(let i=0;i<200&&server.research.jobs.get(job.id).status!=='completed';i++)await new Promise(r=>setTimeout(r,50));
   const done=server.research.jobs.get(job.id);assert.equal(done.status,'completed',JSON.stringify(done.error));assert.equal(done.quality.status,'passed');assert.equal(done.metrics,undefined);const id=done.snapshotId;
   let snapshotFetches=0;page.on('request',r=>{if(r.url().includes('/api/data/bundle?id='))snapshotFetches++;});

@@ -8,6 +8,7 @@ import {defaults,validate} from '../dist/engine.mjs';
 import {auditBundle} from '../dist/quality.mjs';
 import {resampleData} from '../dist/data.mjs';
 import {parseCollectionCodes,batchLimit} from '../dist/collection-batch.mjs';
+import {requiredWarmupSessions} from '../dist/research-input.mjs';
 import {ensureTiming,accrue,startTiming,stopTiming,timingView,iso} from './research-timing.mjs';
 
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -19,7 +20,7 @@ const failure=(code,message,details)=>Object.assign(Error(message),{code,details
 // Research jobs remain pinned to their strategy engine; collection-only jobs
 // never execute that engine. All collection responses are still revalidated.
 // Unknown pipelines still cannot reuse old work.
-const compatiblePipelines=new Set(['5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c']);
+const compatiblePipelines=new Set(['cbfe084871bf787bdd04c3a66462968ba036ab9372758022b316883befd22230','5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:canonical(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 export function yearStart(to){const d=new Date(to+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);d.setUTCFullYear(d.getUTCFullYear()-1);return d.toISOString().slice(0,10);}
 export function normalizeRequest(input){
@@ -38,11 +39,11 @@ export function normalizeRequest(input){
   if(rangeMode==='year'&&input.from!==undefined&&input.from!==from)throw failure('REQUEST','一年模式的开始日期由结束日期自动计算；自定义日期请使用custom模式');
   const cfg=Object.fromEntries(Object.keys(defaults).map(k=>[k,input.config?.[k]??defaults[k]]));
   Object.assign(cfg,{from,to:input.to,board,dataMode:'formal',rulesMode:'historical'});
-  if(!['5m','15m'].includes(cfg.timeframe))throw failure('REQUEST','验收需在5或15分钟执行，原始采集均为5分钟');
-  validate(cfg);
-  const warmupSessions=Math.max(60,cfg.dailySlow,cfg.breakout+1,cfg.exitPeriod,cfg.atrPeriod,cfg.confirmationDays+1,Math.ceil(Math.max(cfg.slow,35,cfg.rsiPeriod+1,cfg.bbPeriod)/(cfg.timeframe==='5m'?48:16))+1);
-  const budget=input.budget??10000;if(!Number.isInteger(budget)||budget<1||budget>40000)throw failure('REQUEST','日预算须为1至40000，默认10000');
   const purpose=input.purpose??'research';if(!['collect','research'].includes(purpose))throw failure('REQUEST','任务用途须为collect或research');
+  if(!(purpose==='collect'?['5m','15m','1d']:['5m','15m']).includes(cfg.timeframe))throw failure('REQUEST','仅采集可指定5分钟、15分钟或日线回测；沪深300正式验收需5或15分钟。原始采集均为5分钟');
+  validate(cfg);
+  const warmupSessions=requiredWarmupSessions(cfg);
+  const budget=input.budget??10000;if(!Number.isInteger(budget)||budget<1||budget>40000)throw failure('REQUEST','日预算须为1至40000，默认10000');
   return {schemaVersion:1,symbol,board,purpose,rangeMode,from,to:input.to,warmupSessions,budget,provider:'baostock',config:cfg};
 }
 export function acceptanceAudit(bundle,request){
@@ -82,7 +83,7 @@ export function auditAccounting(result,bundle){
   return {status:'passed',valuationPoints:checked,fees,checks:['order and corporate cash/share movements','cash + tradable/locked stock value + dividend receivable','order fee sum','final equity','signal availability','sellable quantity']};
 }
 async function engineHash(){const files=['engine.mjs','quality.mjs','data.mjs','rules.mjs','corporate.mjs','fees.mjs','inventory.mjs'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,'dist',f)))]);parts.push(['runner',hash(await readFile(path.join(project,'server/research-runner.mjs')))]);return hash(canonical(parts));}
-async function pipelineHash(){const files=['server/research.mjs','server/research-timing.mjs','collector/research_collect.py','collector/query_cache.py','collector/sources.py','collector/sync.py','collector/locking.py','collector/baostock_guard.py','collector/parquet_store.py'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,f)))]);return hash(canonical(parts));}
+async function pipelineHash(){const files=['server/research.mjs','server/research-timing.mjs','collector/research_collect.py','collector/query_cache.py','dist/research-input.mjs','collector/sources.py','collector/sync.py','collector/locking.py','collector/baostock_guard.py','collector/parquet_store.py'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,f)))]);return hash(canonical(parts));}
 const jsonResponse=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 // Node decodes collector output as UTF-8; Windows pipe encodings must match.
 const pythonEnv=()=>({...process.env,PYTHONIOENCODING:'utf-8'});
