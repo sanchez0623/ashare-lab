@@ -3,7 +3,7 @@
 Only completed SDK responses (including every pagination send) are checkpointed.
 No synthetic data or alternative IP/proxy route is used on a network failure.
 """
-import argparse, datetime as dt, hashlib, json, os, pathlib, sys, tempfile, time
+import argparse, datetime as dt, hashlib, json, os, pathlib, sys, tempfile, time, traceback
 from sync import bs_rows, normalize_baostock, db_open, merge_bars
 from locking import FileLock
 from sources import BaoStockSource
@@ -25,30 +25,58 @@ class Blocked(RuntimeError):
 class Checkpoints:
     def __init__(self,root,emit=lambda x:None,check=lambda:None,traffic=lambda:(0,0)):
         self.root=pathlib.Path(root);self.emit=emit;self.check=check;self.proofs={};self.traffic=traffic
-    def query(self,key,fn):
+    def query(self,key,fn,validate=None):
         self.check();identity={'version':VERSION,'query':key};name=sha(encode(identity));path=self.root/(name+'.json')
         started=time.perf_counter();before=self.traffic();cached=path.exists()
         self.emit({'stage':'collect','phase':'query-start','query':key,'cached':cached,'checkpoints':len(self.proofs)})
-        try:return self._query(key,fn,identity,name,path,started,before)
+        try:return self._query(key,fn,identity,name,path,started,before,validate)
         except Exception as e:
             requests,wait=self.traffic()
             self.emit({'stage':'collect','phase':'query-error','query':key,'cached':cached,'queryElapsedMs':round((time.perf_counter()-started)*1000),'requests':requests-before[0],'rateWaitMs':round(wait-before[1]),'checkpoints':len(self.proofs),'error':str(e)})
             raise
-    def _query(self,key,fn,identity,name,path,started,before):
+    def _query(self,key,fn,identity,name,path,started,before,validate):
+        cached=False
         if path.exists():
             try:
                 envelope=json.loads(path.read_bytes());body=encode(envelope['rows'])
                 if envelope['identity']!=identity or sha(body)!=envelope['sha256']:raise ValueError()
                 rows=envelope['rows']
             except (ValueError,KeyError):raise Blocked('CACHE_HASH','采集断点哈希不一致，拒绝继续：'+name) from None
-            cached=True
-        else:
+            if validate:
+                try:validate(rows);cached=True
+                except Blocked as e:
+                    # Hash integrity does not prove response completeness.
+                    # Preserve the old evidence, and refetch this query once.
+                    rejected=self.root.parent/'quarantine'/(name+'-'+str(time.time_ns())+'.json');rejected.parent.mkdir(parents=True,exist_ok=True)
+                    os.replace(path,rejected);self.proofs.pop(name,None)
+                    self.emit({'stage':'collect','message':'隔离不完整的日历断点并重新查询；不复用错误预热范围：'+str(e)})
+            else:cached=True
+        if not cached:
             rows=fn();self.check();body=encode(rows)
+            if validate:validate(rows)
             atomic(path,encode({'identity':identity,'sha256':sha(body),'rows':rows}));cached=False
         self.proofs[name]={'query':key,'sha256':sha(body),'rows':len(rows)}
         requests,wait=self.traffic()
         self.emit({'stage':'collect','phase':'query-complete','query':key,'rows':len(rows),'cached':cached,'checkpoints':len(self.proofs),'queryElapsedMs':round((time.perf_counter()-started)*1000),'requests':requests-before[0],'rateWaitMs':round(wait-before[1])})
         return rows
+def verified_calendar(rows,start,end):
+    """The API returns trading *and non-trading* days. Verify every date,
+    not just that a response ended or that its SHA matches a cached file.
+    """
+    first=dt.date.fromisoformat(start);last=dt.date.fromisoformat(end);seen={}
+    for r in rows:
+        day=r.get('calendar_date','')
+        try:parsed=dt.date.fromisoformat(day)
+        except (ValueError,TypeError):raise Blocked('CALENDAR_INVALID','交易日历日期格式无效。') from None
+        if parsed.isoformat()!=day or not first<=parsed<=last or r.get('is_trading_day') not in ('0','1'):
+            raise Blocked('CALENDAR_INVALID','交易日历日期、范围或交易状态无效：'+str(day))
+        if day in seen:raise Blocked('CALENDAR_INVALID','交易日历日期重复：'+day)
+        seen[day]=r
+    expected=(last-first).days+1
+    if len(seen)!=expected:
+        missing=next((first+dt.timedelta(days=i)).isoformat() for i in range(expected) if (first+dt.timedelta(days=i)).isoformat() not in seen)
+        raise Blocked('CALENDAR_INCOMPLETE',f'交易日历不完整：需要{expected}个自然日，返回{len(seen)}个；首个缺失{missing}，实际末日{max(seen) if seen else "无"}。停止推导预热日期，禁止扩大分钟查询。')
+    return [seen[d] for d in sorted(seen)]
 def network_check():
     policy=pathlib.Path('/etc/codex/network-policy.json')
     if policy.exists():
@@ -92,12 +120,18 @@ def collect(request,root,store,emit=lambda x:None,parent=None,bs=None,guard_fact
         cache.traffic=lambda:(getattr(guard,'session_requests',0),getattr(guard,'session_wait_ms',0))
         source=BaoStockSource(sdk=bs,check=check)
         q=lambda key,fn:cache.query(key,lambda:bs_rows(fn()))
-        calendar=q(['calendar','1990-12-19',end],lambda:bs.query_trade_dates(start_date='1990-12-19',end_date=end))
+        calendar_start='1990-12-19'
+        calendar=cache.query(['calendar',calendar_start,end],lambda:bs_rows(bs.query_trade_dates(start_date=calendar_start,end_date=end)),validate=lambda rows:verified_calendar(rows,calendar_start,end))
+        calendar=verified_calendar(calendar,calendar_start,end)
         days=[r['calendar_date'] for r in calendar if r['is_trading_day']=='1']
         before=[d for d in days if d<request['from']]
         needed=request['warmupSessions']
         if len(before)<needed:raise Blocked('WARMUP_CALENDAR','独立交易日历不足以定位预热历史。')
         start=before[-needed];sessions=[d for d in days if start<=d<=end]
+        if (dt.date.fromisoformat(request['from'])-dt.date.fromisoformat(start)).days>max(365,needed*4):
+            raise Blocked('WARMUP_RANGE','预热起点距研究开始日异常过远；拒绝扩大采集区间，请检查交易日历。')
+        emit({'stage':'collect','message':f'采集区间已确定：{start} — {end}；研究区间：{request["from"]} — {end}；额外预热{needed}个交易日',
+              'collectionRange':{'from':start,'to':end,'researchFrom':request['from'],'warmupSessions':needed}})
         basic=q(['basic',code],lambda:bs.query_stock_basic(code=code))
         if len(basic)!=1 or basic[0].get('code')!=code:raise Blocked('SECURITY_IDENTITY','证券基本资料缺失或代码不符。')
         # Reject future provider rows rather than silently filtering them.
@@ -150,5 +184,6 @@ def main():
     try:
         collect(json.loads(pathlib.Path(args.request).read_text()),root,args.store,emit,args.parent);return 0
     except Exception as e:
-        error={'stage':'blocked','code':getattr(e,'code','COLLECTOR_ERROR'),'error':str(e)};atomic(root/'error.json',encode(error));emit(error);return 2
+        error={'stage':'blocked','code':getattr(e,'code','COLLECTOR_ERROR'),'error':str(e)}
+        atomic(root/'error.json',encode({**error,'traceback':traceback.format_exc(limit=12)}));emit(error);return 2
 if __name__=='__main__':sys.exit(main())

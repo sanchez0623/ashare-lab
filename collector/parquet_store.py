@@ -28,8 +28,13 @@ def archive(bundle,root):
             target.parent.mkdir(parents=True,exist_ok=True);fd,temp=tempfile.mkstemp(prefix=digest+'.tmp-',dir=target.parent);os.close(fd)
             try:
                 pq.write_table(table,temp,compression='zstd');
-                with open(temp,'rb') as f:os.fsync(f.fileno())
+                # Windows FlushFileBuffers/_commit requires write access.
+                # A read-only descriptor can raise EBADF even though it is
+                # valid and the Parquet write itself completed successfully.
+                with open(temp,'r+b') as f:f.flush();os.fsync(f.fileno())
                 os.replace(temp,target)
+            except OSError as e:
+                raise RuntimeError('Parquet写入或刷盘失败：'+relative.as_posix()+' · '+str(e)) from e
             finally:
                 if os.path.exists(temp):os.unlink(temp)
             if sha(encoded(pq.read_table(target).to_pylist()))!=digest:raise RuntimeError('Parquet写入后内容核对失败：'+str(relative))

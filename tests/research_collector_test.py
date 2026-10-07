@@ -1,7 +1,7 @@
-import datetime as dt,json,pathlib,sys,tempfile,unittest
+import datetime as dt,errno,json,os,pathlib,sys,tempfile,unittest
 from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'collector'))
-from research_collect import Checkpoints,Blocked,collect,months,network_check
+from research_collect import Checkpoints,Blocked,collect,months,network_check,verified_calendar,encode,sha,VERSION
 
 class Result:
     error_code='0';error_msg=''
@@ -21,7 +21,10 @@ class FakeSDK:
             d+=dt.timedelta(days=1)
         return rows
     def query_trade_dates(self,start_date,end_date):
-        self.calls.append('calendar');return Result([{'calendar_date':d,'is_trading_day':'1'} for d in self.days('2024-01-02',end_date)])
+        self.calls.append('calendar');day=dt.date.fromisoformat(start_date);last=dt.date.fromisoformat(end_date);rows=[]
+        while day<=last:
+            rows.append({'calendar_date':day.isoformat(),'is_trading_day':'1' if day.weekday()<5 else '0'});day+=dt.timedelta(days=1)
+        return Result(rows)
     def query_stock_basic(self,code):self.calls.append('basic');return Result([{'code':code,'ipoDate':'2024-01-02','code_name':'TEST FIXTURE'}])
     def query_adjust_factor(self,code,**kw):self.calls.append('factors');return Result([])
     def query_dividend_data(self,code,**kw):self.calls.append('dividends');return Result([])
@@ -38,6 +41,69 @@ class FakeSDK:
         return Result(rows)
 
 class ResearchCollectorTests(unittest.TestCase):
+    def test_parquet_durability_uses_windows_compatible_writable_descriptors_and_recovers_from_flush_failure(self):
+        from parquet_store import archive
+        real_fsync=os.fsync
+        if os.name=='nt':windows_commit=real_fsync
+        else:
+            import fcntl
+            def windows_commit(fd):
+                # Enforce Windows' writable-handle rule on a real POSIX fd.
+                if fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE==os.O_RDONLY:
+                    raise OSError(errno.EBADF,'Bad file descriptor')
+                return real_fsync(fd)
+        bundle={'metadata':{'symbol':'001389','source':'test-only'},'bars':[{'date':'2025-07-08 09:35','close':10.,'volume':100}], 'daily':[{'date':'2025-07-08','close':10.}], 'calendar':['2025-07-08'],'actions':[],'factors':[],'universe':[]}
+        with tempfile.TemporaryDirectory() as root:
+            with patch('parquet_store.os.fsync',side_effect=OSError(errno.EBADF,'Bad file descriptor')):
+                with self.assertRaisesRegex(RuntimeError,'bars.*Bad file descriptor'):archive(bundle,root)
+            self.assertFalse(list(pathlib.Path(root).rglob('*.tmp-*')));self.assertFalse(list(pathlib.Path(root).rglob('*.receipt.json')))
+            with patch('parquet_store.os.fsync',side_effect=windows_commit):
+                first=archive(bundle,root);second=archive(bundle,root)
+            self.assertEqual(first,second);self.assertEqual(len(first['tables']),6);self.assertEqual(first['tables']['bars']['rows'],1)
+    def test_archive_failure_resumes_from_existing_verified_query_checkpoints(self):
+        request={'symbol':'001389','board':'main','purpose':'collect','from':'2025-10-01','to':'2026-09-30','warmupSessions':60}
+        with tempfile.TemporaryDirectory() as root:
+            base=pathlib.Path(root);bs=FakeSDK();bs.fail=False
+            with patch('parquet_store.archive',side_effect=OSError(errno.EBADF,'Bad file descriptor')):
+                with self.assertRaises(Blocked) as e:collect(request,base/'job',base/'market',bs=bs)
+            self.assertEqual(e.exception.code,'PARQUET_ARCHIVE');calls=list(bs.calls)
+            result=collect(request,base/'job',base/'market',bs=bs)
+            self.assertEqual(bs.calls,calls);self.assertEqual(len(result['metadata']['parquetArchive']['tables']),6)
+    def test_partial_calendar_stops_before_daily_dividends_or_minutes(self):
+        # A 6,000-day prefix ends in 2007; the prior [-60] calculation could
+        # mistakenly request almost two decades of minutes for a 2025 task.
+        request={'symbol':'001389','board':'main','purpose':'collect','from':'2025-10-01','to':'2026-09-30','warmupSessions':60}
+        with tempfile.TemporaryDirectory() as root:
+            bs=FakeSDK();bs.fail=False;original=bs.query_trade_dates
+            def truncated(start_date,end_date):return Result(original(start_date,end_date).rows[:6000])
+            with patch.object(bs,'query_trade_dates',side_effect=truncated),self.assertRaises(Blocked) as e:
+                collect(request,pathlib.Path(root)/'job',pathlib.Path(root)/'market',bs=bs)
+            self.assertEqual(e.exception.code,'CALENDAR_INCOMPLETE');self.assertEqual(bs.calls,['calendar'])
+            self.assertEqual(list((pathlib.Path(root)/'job/queries').glob('*.json')),[])
+    def test_resume_quarantines_a_hash_valid_partial_calendar_and_uses_nearest_warmup(self):
+        request={'symbol':'001389','board':'main','purpose':'collect','from':'2025-10-01','to':'2026-09-30','warmupSessions':60}
+        with tempfile.TemporaryDirectory() as root:
+            base=pathlib.Path(root);queries=base/'job/queries';queries.mkdir(parents=True);bs=FakeSDK();bs.fail=False
+            key=['calendar','1990-12-19',request['to']];identity={'version':VERSION,'query':key};name=sha(encode(identity));rows=bs.query_trade_dates(start_date=key[1],end_date=key[2]).rows[:6000];bs.calls=[]
+            (queries/(name+'.json')).write_bytes(encode({'identity':identity,'sha256':sha(encode(rows)),'rows':rows}))
+            events=[];bundle=collect(request,base/'job',base/'market',emit=events.append,bs=bs)
+            expected=bs.days('2025-01-01','2025-09-30')[-60]
+            self.assertEqual(bundle['metadata']['requested']['from'],expected);self.assertEqual(bs.calls.count('calendar'),1)
+            self.assertEqual(len(list((base/'job/quarantine').glob('*.json'))),1)
+            self.assertTrue(any('隔离' in e.get('message','') for e in events));self.assertTrue(any(e.get('collectionRange',{}).get('from')==expected for e in events))
+            self.assertTrue(all(c.split(':')[1]>=expected for c in bs.calls if c.startswith('5:')))
+            self.assertFalse(any(p['query'][0]=='dividends' and p['query'][2]<2024 for p in bundle['metadata']['provenance']['queries'].values()))
+    def test_unordered_complete_calendar_is_sorted_and_holes_duplicates_and_flags_rejected(self):
+        rows=[{'calendar_date':'2025-09-30','is_trading_day':'1'},{'calendar_date':'2025-09-28','is_trading_day':'0'},{'calendar_date':'2025-09-29','is_trading_day':'1'}]
+        self.assertEqual([r['calendar_date'] for r in verified_calendar(rows,'2025-09-28','2025-09-30')],['2025-09-28','2025-09-29','2025-09-30'])
+        for broken in [rows[:-1],rows+[rows[0]],[{**r,'is_trading_day':'bad'} for r in rows]]:
+            with self.assertRaises(Blocked):verified_calendar(broken,'2025-09-28','2025-09-30')
+        request={'symbol':'001389','board':'main','purpose':'collect','from':'2025-10-01','to':'2026-09-30','warmupSessions':60}
+        with tempfile.TemporaryDirectory() as root:
+            bs=FakeSDK();bs.fail=False;original=bs.query_trade_dates
+            def reversed_rows(start_date,end_date):return Result(list(reversed(original(start_date,end_date).rows)))
+            with patch.object(bs,'query_trade_dates',side_effect=reversed_rows):bundle=collect(request,pathlib.Path(root)/'job',pathlib.Path(root)/'market',bs=bs)
+            self.assertEqual(bundle['metadata']['requested']['from'],bs.days('2025-01-01','2025-09-30')[-60]);self.assertEqual(bundle['calendar'],sorted(bundle['calendar']))
     def test_collection_only_never_queries_membership_and_timing_does_not_change_evidence(self):
         request={'symbol':'600519','board':'main','purpose':'collect','from':'2024-05-01','to':'2025-04-30','warmupSessions':60}
         with tempfile.TemporaryDirectory() as root:

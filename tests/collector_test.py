@@ -35,6 +35,21 @@ class CollectTests(unittest.TestCase):
      with self.assertRaisesRegex(RuntimeError,'本日采集停止'):sock.send_msg('query2')
      self.assertEqual(remote.call_count,1)
     finally:restore();g.close()
+ def test_empty_sdk_pagination_response_raises_instead_of_silently_finishing_partial_rows(self):
+  import baostock.util.socketutil as sock
+  from baostock.data.resultset import ResultData
+  from baostock.common import contants as cons
+  for response in [None,'','   ']:
+   with self.subTest(response=response),tempfile.TemporaryDirectory() as root:
+    guard=TrafficGuard(pathlib.Path(root)/'budget.db')
+    with patch.object(sock,'send_msg',return_value=response) as remote:
+     try:
+      rs=ResultData();rs.error_code='0';rs.data=[['test']]*cons.BAOSTOCK_PER_PAGE_COUNT;rs.cur_row_num=len(rs.data);rs.cur_page_num='1';rs.msg_body=cons.MESSAGE_SPLIT.join(['calendar','user','1','2000','start','end']);rs.msg_type=cons.MESSAGE_TYPE_QUERYTRADEDATES_REQUEST
+      self.assertFalse(rs.next());self.assertEqual(rs.error_code,'0');remote.reset_mock()
+      restore=install(guard)
+      with self.assertRaises(RuntimeError) as e:rs.next()
+      self.assertEqual(e.exception.code,'PROVIDER_RESPONSE_INCOMPLETE');self.assertEqual(remote.call_count,1)
+     finally:restore();guard.close()
  def test_repeated_minutes_are_idempotent_and_revisions_quarantined(self):
   with tempfile.TemporaryDirectory() as root:
    db=sync.db_open(pathlib.Path(root)/'market.db');r={'date':'2024-01-02 09:35','close':10}

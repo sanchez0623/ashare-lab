@@ -37,6 +37,12 @@ def install(guard):
     original=sock.send_msg
     def guarded(msg):
         guard.reserve();result=original(msg)
+        # ResultData.next() can return False on an empty pagination response
+        # without updating error_code. Raise here so partial rows cannot be
+        # mistaken for a completed query/checkpoint by the SDK consumer.
+        if result is None or not result.strip():
+            error=RuntimeError('BaoStock响应为空，可能为分页或网络中断；当前查询不保存检查点，恢复时重新查询本项。')
+            error.code='PROVIDER_RESPONSE_INCOMPLETE';raise error
         from baostock.common import contants as cons
         error_code=result[cons.MESSAGE_HEADER_LENGTH:].split(cons.MESSAGE_SPLIT,1)[0] if result else ''
         if error_code=='10001011':guard.block();raise RuntimeError('BaoStock黑名单10001011：立即停止，不自动重试。')

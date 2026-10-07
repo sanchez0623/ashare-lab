@@ -14,9 +14,10 @@ export const canonical=value=>JSON.stringify(value,(_key,v)=>v&&typeof v==='obje
 export const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const now=()=>new Date().toISOString(),date=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s;
 const failure=(code,message,details)=>Object.assign(Error(message),{code,details});
-// Only this reviewed predecessor has identical research-mode query identities,
-// output semantics and engine. Unknown pipelines still cannot reuse old work.
-const compatiblePipeline='5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967';
+// Reviewed predecessors retain query identities and engine. Calendar responses
+// are revalidated; incomplete old checkpoints are quarantined, never trusted.
+// Unknown pipelines still cannot reuse old work.
+const compatiblePipelines=new Set(['5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:canonical(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 export function yearStart(to){const d=new Date(to+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);d.setUTCFullYear(d.getUTCFullYear()-1);return d.toISOString().slice(0,10);}
 export function normalizeRequest(input){
@@ -122,6 +123,7 @@ export class ResearchManager {
   async stage(job,stage,message){this.check(job);accrue(job,this.clock());job.stage=stage;await this.save(job,message);}
   async progress(job,p){
     job.progress=p;let message;
+    if(p.collectionRange)job.collectionRange=p.collectionRange;
     if(p.stage==='blocked')job.collectorError=p;
     if(p.query){
       const query=p.query.join(' / ');
@@ -142,9 +144,9 @@ export class ResearchManager {
     // provenance while still checking the request, snapshot and engine hashes.
     const currentPipeline=await pipelineHash();
     if(!job.snapshotId&&job.pipelineHash!==currentPipeline){
-      if(job.pipelineHash===compatiblePipeline&&(job.request.purpose??'research')==='research'){
-        job.pipelineMigrations??=[];job.pipelineMigrations.push({from:job.pipelineHash,to:currentPipeline,at:iso(this.clock()),reason:'计时与独立行情模式升级；原研究查询、数据口径和引擎未变'});job.pipelineHash=currentPipeline;
-        await this.save(job,'兼容升级原研究任务；保留原用途及已校验查询断点，升级前耗时无法补测');
+      if(compatiblePipelines.has(job.pipelineHash)){
+        job.pipelineMigrations??=[];job.pipelineMigrations.push({from:job.pipelineHash,to:currentPipeline,at:iso(this.clock()),reason:'已审查升级：查询身份及引擎未变；新增日历覆盖校验，隔离不完整断点后重查'});job.pipelineHash=currentPipeline;
+        await this.save(job,'兼容恢复旧任务，保留原参数及累计时间；交易日历先校验完整覆盖，不完整日历隔离后重查；升级前未计时时段无法补测');
       }else throw failure('PIPELINE_CHANGED','采集或验收代码已改变，不能与旧断点混用，请创建新任务');
     }
     const cfg=job.request.config,collection=this.location(job.id,'collection');let bundle,bytes;
@@ -179,7 +181,7 @@ export class ResearchManager {
     const report={schemaVersion:1,acceptance:job.acceptance,input:{requestHash:job.requestHash,configHash:job.configHash,engineHash:job.engineHash,pipelineHash:job.pipelineHash,snapshotId:id,runtime:{node:process.versions.node}},request:job.request,quality:job.quality,reproducibility:{status:'passed',runs:2,resultHash:firstHash,repeatedHash:secondHash},accounting,result:first,limitations:['历史沪深300成员按BaoStock周度快照；不证明交易所逐事件历史可得性','公司行动资料不完整或遇到未支持的配股时阻止正式回测','单标的历史样本不保证盈利；未平仓和未配对T均保留在报告']};
     await this.stage(job,'report','保存完整报告、交易明细与净值曲线');await this.saveReport(job,report);job.metrics=first.metrics;stopTiming(job,this.clock(),'completed');job.status='completed';job.stage='completed';delete job.error;await this.save(job,job.acceptance==='passed'?'真实数据流程验收通过（不代表策略盈利）':'合成夹具流程测试完成，不属于真实数据验收');
   }
-  async saveReport(job,report){const bytes=canonical(report),id=hash(bytes);await atomic(path.join(this.root,'reports',id+'.json'),bytes);job.reportHash=id;await this.save(job);}
+  async saveReport(job,report){const bytes=canonical(report),id=hash(bytes);await atomic(path.join(this.root,'reports',id+'.json'),bytes);job.reportHash=id;job.reportRun=job.timing.runs.length;await this.save(job);}
   async python(){if(process.env.ASHARE_PYTHON)return process.env.ASHARE_PYTHON;for(const base of ['collector/.venv','.venv']){const venv=path.join(project,base,process.platform==='win32'?'Scripts/python.exe':'bin/python');try{await access(venv);return venv;}catch{}}return process.platform==='win32'?'python':'python3';}
   async sourceStatus(){
     if(this.sourceCache&&Date.now()-this.sourceCache.at<60000)return this.sourceCache.value;
@@ -199,7 +201,7 @@ export class ResearchManager {
     child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{pending+=chunk;if(pending.length>1024*1024)pending=pending.slice(-65536);let index;while((index=pending.indexOf('\n'))!==-1){const line=pending.slice(0,index);pending=pending.slice(index+1);try{const p=JSON.parse(line);this.progress(job,p).catch(()=>{});}catch{}}});
     child.stderr.setEncoding('utf8');child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-4000);});
     try{await new Promise((resolve,reject)=>{child.once('error',e=>reject(failure('PYTHON_MISSING','无法启动Python。安装依赖，或设置ASHARE_PYTHON：'+e.code)));child.once('close',code=>code===0?resolve():reject(failure('COLLECTOR_ERROR','采集器中断：'+(stderr.includes('ModuleNotFoundError')?'缺少Python依赖，请安装collector/requirements.txt':'退出码 '+code))));});}
-    catch(e){this.check(job);let detail;try{detail=JSON.parse(await readFile(path.join(collection,'error.json'),'utf8'));}catch{}throw detail?failure(detail.code,detail.error):e;}
+    catch(e){this.check(job);let detail;try{detail=JSON.parse(await readFile(path.join(collection,'error.json'),'utf8'));}catch{}throw detail?failure(detail.code,detail.error,detail.traceback?{collectorTraceback:detail.traceback}:undefined):e;}
     finally{job.controller.signal.removeEventListener('abort',abort);this.child=null;}
   }
   async runEngine(job,snapshot,config){

@@ -63,6 +63,23 @@ test('only the reviewed legacy pipeline can migrate and reuse original research 
   ctx.manager.pipelineFingerprint='5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967';
   const j=await ctx.manager.create(input(b)),done=await until(ctx.manager,j.id);assert.equal(done.status,'completed',JSON.stringify(done.error));
   assert.equal(done.pipelineMigrations.length,1);assert.notEqual(done.pipelineHash,ctx.manager.pipelineFingerprint);
+  ctx.manager.pipelineFingerprint='29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c';
+  const raw=await ctx.manager.create({...input(b),purpose:'collect'}),collected=await until(ctx.manager,raw.id);assert.equal(collected.status,'completed');assert.equal(collected.pipelineMigrations.length,1);assert.equal(collected.request.purpose,'collect');
+ }finally{await ctx.manager.close();await rm(ctx.dir,{recursive:true,force:true});}
+});
+test('a blocked report remains downloadable but belongs to the previous attempt after resume',async()=>{
+ const b=dataset();let first=true;
+ const ctx=await setup(async(_r,_p,signal,progress)=>{
+  if(first){first=false;throw Error('模拟断网');}
+  await progress({collectionRange:{from:b.metadata.requested.from,to:b.calendar.at(-1),researchFrom:input(b).to,warmupSessions:60}});
+  if(signal.aborted)throw Object.assign(Error('暂停'),{code:'PAUSED'});
+  return new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Object.assign(Error('暂停'),{code:'PAUSED'})),{once:true}));
+ });
+ try{
+  const j=await ctx.manager.create({...input(b),purpose:'collect'}),blocked=await until(ctx.manager,j.id);await ctx.manager.running;const prior=blocked.reportHash;
+  assert.equal(blocked.reportRun,1);const resumed=await ctx.manager.resume(j.id);assert.equal(resumed.reportHash,prior);assert.equal(resumed.reportRun,1);assert.equal(resumed.timing.runs.length,2);
+  for(let i=0;i<100&&!ctx.manager.jobs.get(j.id).collectionRange;i++)await new Promise(r=>setTimeout(r,10));
+  assert.ok(ctx.manager.jobs.get(j.id).collectionRange);assert.equal(hash(await ctx.manager.report(resumed)),prior);await ctx.manager.pause(j.id);
  }finally{await ctx.manager.close();await rm(ctx.dir,{recursive:true,force:true});}
 });
 test('interrupted running state restores only durable active time and automatically accumulates a new run',async()=>{
