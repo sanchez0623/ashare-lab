@@ -75,6 +75,8 @@ python -m unittest discover -s tests -p "*collector_test.py" -v
 
 JSON报告保存对应行情、策略、成交/日线信号时间、净值、公司行动账本与质量审计；参数或标的切换而未回测时，导出仍对应上次已完成结果。
 
+交易明细将“T配对净盈亏”和“波段结算盈亏”分列，正T止损在卖出结束行显示，反T在买入回补行显示；净价差已扣两腿费用，仅显示一次，不能与已包含T的波段盈亏相加。纯展示适配器不改原始回测结果、信号、净值或旧报告。CSV提供分列及配对状态，网页JSON增加 `tradeDetails` 口径和明细；未配对/未结算不当作零利润。
+
 ## 统一多源接口
 
 `collector/sources.py` 延迟注册BaoStock、AkShare、mootdx、理杏仁和新浪，按数据类型提供辅助降级；未安装可选SDK时available=False。`requirements.txt` 为最小年度安装，额外SDK见requirements-sources.txt。网页新增就绪情况入口和 `GET /api/research/sources`（60秒配置缓存，无行情/付费探测）。年度自动采集已复用统一BaoStock适配器，正式多源混合准入仍需历史资料和单位校验；mootdx真实连接未验证。详情见LOCAL_DEPLOY.md。
