@@ -7,6 +7,7 @@ import {Worker} from 'node:worker_threads';
 import {defaults,validate} from '../dist/engine.mjs';
 import {auditBundle} from '../dist/quality.mjs';
 import {resampleData} from '../dist/data.mjs';
+import {parseCollectionCodes,batchLimit} from '../dist/collection-batch.mjs';
 import {ensureTiming,accrue,startTiming,stopTiming,timingView,iso} from './research-timing.mjs';
 
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -18,7 +19,7 @@ const failure=(code,message,details)=>Object.assign(Error(message),{code,details
 // Research jobs remain pinned to their strategy engine; collection-only jobs
 // never execute that engine. All collection responses are still revalidated.
 // Unknown pipelines still cannot reuse old work.
-const compatiblePipelines=new Set(['42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c']);
+const compatiblePipelines=new Set(['e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:canonical(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 export function yearStart(to){const d=new Date(to+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);d.setUTCFullYear(d.getUTCFullYear()-1);return d.toISOString().slice(0,10);}
 export function normalizeRequest(input){
@@ -87,7 +88,7 @@ const jsonResponse=(v,status=200)=>new Response(JSON.stringify(v),{status,header
 const pythonEnv=()=>({...process.env,PYTHONIOENCODING:'utf-8'});
 
 export class ResearchManager {
-  constructor({root,bucket,collector,runner,clock=Date.now,heartbeatMs=5000}={}){this.root=path.resolve(root);this.bucket=bucket;this.collector=collector;this.runner=runner;this.clock=clock;this.heartbeatMs=heartbeatMs;this.jobs=new Map();this.active=null;this.stopping=false;this.saves=Promise.resolve();}
+  constructor({root,bucket,collector,runner,clock=Date.now,heartbeatMs=5000}={}){this.root=path.resolve(root);this.bucket=bucket;this.collector=collector;this.runner=runner;this.clock=clock;this.heartbeatMs=heartbeatMs;this.jobs=new Map();this.batches=new Map();this.batchWrites=Promise.resolve();this.active=null;this.stopping=false;this.saves=Promise.resolve();}
   location(id,name){if(!/^[a-f0-9]{24}$/.test(id))throw failure('NOT_FOUND','任务不存在');return path.join(this.root,'jobs',id,name);}
   async init(){
     await mkdir(this.root,{recursive:true});this.lock=path.join(this.root,'.controller-lock');this.owner=randomUUID();
@@ -96,14 +97,21 @@ export class ResearchManager {
       if(alive)throw Error('该数据目录已有本地任务服务，禁止两个调度器并发');await rm(this.lock,{recursive:true});await mkdir(this.lock);
     }
     await atomic(path.join(this.lock,'owner.json'),{pid:process.pid,owner:this.owner});this.fingerprint=await engineHash();this.pipelineFingerprint=await pipelineHash();
+    await mkdir(path.join(this.root,'batches'),{recursive:true});
+    for(const file of await readdir(path.join(this.root,'batches'))){if(!/^[a-f0-9]{24}\.json$/.test(file))continue;const id=file.slice(0,-5);
+      try{const b=JSON.parse(await readFile(this.batchLocation(id),'utf8'));if(b.id!==id||!Array.isArray(b.requests)||b.requests.length<1||b.requests.length>batchLimit||b.jobIds?.length!==b.requests.length||hash(canonical(b.requests))!==b.requestHash||b.requests.some((r,i)=>b.jobIds[i]!==this.batchJobId(id,i)))throw Error('批次请求或任务编号校验失败');this.batches.set(id,b);}
+      catch(e){this.batches.set(id,{id,creationState:'blocked',createdAt:now(),error:{code:'BATCH_INTEGRITY',message:e.message},requests:[],jobIds:[]});}
+    }
     await mkdir(path.join(this.root,'jobs'),{recursive:true});
     for(const id of await readdir(path.join(this.root,'jobs'))){if(!/^[a-f0-9]{24}$/.test(id))continue;
       try{const state=JSON.parse(await readFile(this.location(id,'state.json'),'utf8'));const raw=await readFile(this.location(id,'request.json'),'utf8');
         if(hash(raw)!==state.requestHash)throw Error('任务请求哈希不符');state.request=JSON.parse(raw);this.jobs.set(id,state);
         ensureTiming(state);
         if(state.status==='running'){stopTiming(state,this.clock(),'interrupted',{recovered:true});state.status='queued';state.recoveryCount=(state.recoveryCount??0)+1;await this.save(state,'服务中断后自动恢复；累计时间截至最后落盘心跳，停机期间不计时；复用已完成分段');}
-      }catch(e){const state={id,status:'failed',stage:'recovery',createdAt:now(),updatedAt:now(),events:[],error:{code:'JOB_INTEGRITY',message:e.message}};this.jobs.set(id,state);}
+      }catch(e){const staged=[...this.batches.values()].some(b=>b.creationState==='staging'&&b.jobIds.includes(id));let stateExists=true;try{await access(this.location(id,'state.json'));}catch(x){if(x.code==='ENOENT')stateExists=false;}
+        if(staged&&!stateExists)continue;const state={id,status:'failed',stage:'recovery',createdAt:now(),updatedAt:now(),events:[],error:{code:'JOB_INTEGRITY',message:e.message}};this.jobs.set(id,state);}
     }
+    for(const b of this.batches.values())if(b.creationState==='staging'){try{await this.stageBatch(b);}catch(e){b.creationState='blocked';b.error={code:e.code??'BATCH_RECOVERY',message:e.message};await atomic(this.batchLocation(b.id),b);}}
     this.pump();return this;
   }
   async save(job,message){const at=this.clock();accrue(job,at);job.updatedAt=iso(at);let event;
@@ -111,16 +119,43 @@ export class ResearchManager {
     const copy=JSON.parse(JSON.stringify(job));delete copy.request;delete copy.controller;this.saves=this.saves.catch(()=>{}).then(async()=>{await atomic(this.location(job.id,'state.json'),copy);if(event)await writeFile(this.location(job.id,'events.jsonl'),canonical(event)+'\n',{flag:'a'});});await this.saves;
   }
   view(job){const {controller,...value}=job;return {...value,timing:timingView(job,this.clock()),events:job.events??[]};}
-  async create(input,{replay}={}){
-    const request=replay?replay.request:normalizeRequest(input),id=randomUUID().replaceAll('-','').slice(0,24),bytes=canonical(request);
-    const job={id,request,requestHash:hash(bytes),engineHash:replay?.engineHash??this.fingerprint,pipelineHash:replay?.pipelineHash??this.pipelineFingerprint,configHash:hash(canonical(request.config)),status:'queued',stage:'queued',createdAt:iso(this.clock()),updatedAt:iso(this.clock()),events:[],recoveryCount:0,timing:{version:1,activeMs:0,stages:{},runs:[],accountedAt:null}};
+  async create(input,{replay,normalized,id=randomUUID().replaceAll('-','').slice(0,24),batchId,versions,deferPump=false}={}){
+    const request=normalized??(replay?replay.request:normalizeRequest(input)),bytes=canonical(request);
+    const job={id,request,requestHash:hash(bytes),engineHash:versions?.engineHash??replay?.engineHash??this.fingerprint,pipelineHash:versions?.pipelineHash??replay?.pipelineHash??this.pipelineFingerprint,configHash:hash(canonical(request.config)),status:'queued',stage:'queued',createdAt:iso(this.clock()),updatedAt:iso(this.clock()),events:[],recoveryCount:0,timing:{version:1,activeMs:0,stages:{},runs:[],accountedAt:null}};
     if(replay){job.snapshotId=replay.snapshotId;job.expectedResultHash=replay.resultHash;job.replayOf=replay.id;}
-    await atomic(this.location(id,'request.json'),bytes);await this.save(job,'任务已保存，等待串行执行');this.jobs.set(id,job);this.pump();return this.view(job);
+    if(batchId)job.batchId=batchId;
+    await atomic(this.location(id,'request.json'),bytes);await this.save(job,'任务已保存，等待串行执行');this.jobs.set(id,job);if(!deferPump)this.pump();return this.view(job);
   }
-  pump(){if(this.active||this.stopping)return;const job=[...this.jobs.values()].filter(j=>j.status==='queued').sort((a,b)=>a.createdAt.localeCompare(b.createdAt))[0];if(!job)return;
+  batchLocation(id){if(!/^[a-f0-9]{24}$/.test(id))throw failure('NOT_FOUND','批次不存在');return path.join(this.root,'batches',id+'.json');}
+  batchJobId(id,i){return hash(id+':'+i).slice(0,24);}
+  batchView(b){const jobs=b.jobIds.map(id=>this.jobs.get(id)),counts=Object.fromEntries(['queued','running','paused','blocked','failed','completed'].map(s=>[s,jobs.filter(j=>j?.status===s).length]));return {id:b.id,createdAt:b.createdAt,creationState:b.creationState,paused:!!b.paused,duplicates:b.duplicates,total:b.requests.length,symbols:b.requests.map(r=>r.symbol),from:b.requests[0]?.from,to:b.requests[0]?.to,purpose:b.requests[0]?.purpose,jobIds:b.jobIds,counts,missing:jobs.filter(j=>!j).length,incomplete:jobs.filter(j=>j?.status==='completed'&&j.quality?.status==='blocked').length,activeMs:jobs.reduce((s,j)=>s+(j?timingView(j,this.clock()).activeMs:0),0),error:b.error??null};}
+  async stageBatch(b){
+    for(let i=0;i<b.requests.length;i++){const id=b.jobIds[i],request=b.requests[i],digest=hash(canonical(request)),existing=this.jobs.get(id);
+      if(existing){if(existing.requestHash!==digest||existing.batchId!==b.id)throw failure('BATCH_INTEGRITY','批次已有任务不匹配，保留原始证据');continue;}
+      let prior;try{prior=await readFile(this.location(id,'request.json'),'utf8');}catch(e){if(e.code!=='ENOENT')throw e;}
+      if(prior!==undefined&&hash(prior)!==digest)throw failure('BATCH_INTEGRITY','未完成写入的任务请求哈希不匹配');
+      await this.create(null,{normalized:request,id,batchId:b.id,versions:b.versions,deferPump:true});
+    }
+    b.creationState='ready';delete b.error;await atomic(this.batchLocation(b.id),b);this.pump();return this.batchView(b);
+  }
+  async createBatch(input){
+    let parsed;try{parsed=parseCollectionCodes(input?.symbols);}catch(e){throw failure('REQUEST',e.message);}
+    const requests=parsed.symbols.map(symbol=>normalizeRequest({...input,symbol}));
+    const key=input.requestId??randomUUID();if(typeof key!=='string'||!/^[A-Za-z0-9_-]{8,100}$/.test(key))throw failure('REQUEST','批量提交编号无效');
+    const id=hash('batch:'+key).slice(0,24),requestHash=hash(canonical(requests));
+    const operation=this.batchWrites.catch(()=>{}).then(async()=>{
+      const existing=this.batches.get(id);if(existing){if(existing.requestHash!==requestHash)throw failure('REQUEST','同一提交编号不能用于不同代码或参数');if(existing.creationState==='staging')await this.stageBatch(existing);return {...this.batchView(existing),reused:true};}
+      const b={schemaVersion:1,id,createdAt:iso(this.clock()),creationState:'staging',paused:false,versions:{engineHash:this.fingerprint,pipelineHash:this.pipelineFingerprint},requestHash,requests,duplicates:parsed.duplicates,jobIds:requests.map((_,i)=>this.batchJobId(id,i))};
+      await atomic(this.batchLocation(id),b);this.batches.set(id,b);await this.stageBatch(b);return this.batchView(b);
+    });this.batchWrites=operation;return operation;
+  }
+  async holdBatch(id,message){const b=this.batches.get(id);if(!b)return;b.paused=true;b.error={code:'SOURCE_LIMIT',message:'数据源限流或黑名单：本批已暂停，保留断点；处理限制后手动恢复。'+message};await atomic(this.batchLocation(id),b);for(const jobId of b.jobIds){const job=this.jobs.get(jobId);if(job?.status==='queued'){job.status='paused';await this.save(job,'同批触发数据源流量限制，停止排队请求，保留断点等待手动恢复');}}}
+  async pauseBatch(id){const b=this.batches.get(id);if(!b)throw failure('NOT_FOUND','批次不存在');b.paused=true;await atomic(this.batchLocation(id),b);for(const jobId of b.jobIds){const job=this.jobs.get(jobId);if(['queued','running'].includes(job?.status))await this.pause(jobId);}return this.batchView(b);}
+  async resumeBatch(id){const b=this.batches.get(id);if(!b)throw failure('NOT_FOUND','批次不存在');if(b.creationState!=='ready')throw failure('STATE','批次创建未完成或完整性受阻，请先处理错误');b.paused=false;delete b.error;await atomic(this.batchLocation(id),b);const errors=[];for(const jobId of b.jobIds)if(['paused','blocked','failed'].includes(this.jobs.get(jobId)?.status)){try{await this.resume(jobId);}catch(e){errors.push({id:jobId,message:e.message});}}this.pump();return {...this.batchView(b),resumeErrors:errors};}
+  pump(){if(this.active||this.stopping)return;const job=[...this.jobs.values()].filter(j=>j.status==='queued'&&(!j.batchId||this.batches.get(j.batchId)?.creationState==='ready'&&!this.batches.get(j.batchId).paused)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt))[0];if(!job)return;
     this.active=job;job.status='running';job.controller=new AbortController();startTiming(job,this.clock());
     const heartbeat=setInterval(()=>{if(job.status==='running')this.save(job).catch(()=>{});},this.heartbeatMs);heartbeat.unref();
-    this.running=this.execute(job).catch(async e=>{const paused=job.controller.signal.aborted||e.code==='PAUSED';const status=paused?'paused':e.code==='ACCOUNTING'||e.code==='REPRODUCIBILITY'||e.code==='SNAPSHOT_HASH'?'failed':'blocked';stopTiming(job,this.clock(),status);job.status=status;job.error={code:e.code??'TASK_ERROR',message:e.message,...(e.details?{details:e.details}:{})};delete job.controller;await this.save(job,e.message);if(!paused)await this.saveReport(job,{schemaVersion:1,acceptance:'blocked',input:{requestHash:job.requestHash,configHash:job.configHash,engineHash:job.engineHash,pipelineHash:job.pipelineHash,snapshotId:job.snapshotId??null},request:job.request,error:job.error,quality:job.quality??null});}).finally(()=>{clearInterval(heartbeat);delete job.controller;this.active=null;this.pump();});
+    this.running=this.execute(job).catch(async e=>{const paused=job.controller.signal.aborted||e.code==='PAUSED';const status=paused?'paused':e.code==='ACCOUNTING'||e.code==='REPRODUCIBILITY'||e.code==='SNAPSHOT_HASH'?'failed':'blocked';stopTiming(job,this.clock(),status);job.status=status;job.error={code:e.code??'TASK_ERROR',message:e.message,...(e.details?{details:e.details}:{})};delete job.controller;await this.save(job,e.message);if(!paused)await this.saveReport(job,{schemaVersion:1,acceptance:'blocked',input:{requestHash:job.requestHash,configHash:job.configHash,engineHash:job.engineHash,pipelineHash:job.pipelineHash,snapshotId:job.snapshotId??null},request:job.request,error:job.error,quality:job.quality??null});if(!paused&&job.batchId&&/黑名单|10001011|日请求预算/.test(e.message))await this.holdBatch(job.batchId,e.message);}).finally(()=>{clearInterval(heartbeat);delete job.controller;this.active=null;this.pump();});
   }
   check(job){if(job.controller?.signal.aborted||this.stopping)throw failure('PAUSED','任务已暂停，断点保留');}
   async stage(job,stage,message){this.check(job);accrue(job,this.clock());job.stage=stage;await this.save(job,message);}
@@ -220,13 +255,15 @@ export class ResearchManager {
   async resume(id){const job=this.jobs.get(id);if(!job?.request)throw failure('NOT_FOUND','任务请求损坏或不存在');if(!['paused','blocked','failed'].includes(job.status))throw failure('STATE','仅暂停或受阻任务可以恢复');if(job.request.purpose!=='collect'&&job.engineHash!==this.fingerprint)throw failure('ENGINE_CHANGED','引擎已变更，请创建新任务');job.status='queued';delete job.error;delete job.collectorError;await this.save(job,'从已核验的检查点恢复');this.pump();return this.view(job);}
   async report(job){if(!job?.reportHash)throw failure('NOT_FOUND','报告尚未生成');const body=await readFile(path.join(this.root,'reports',job.reportHash+'.json'));if(hash(body)!==job.reportHash)throw failure('REPORT_HASH','报告文件哈希不一致');return body;}
   async repeat(id){const job=this.jobs.get(id);if(job?.status!=='completed')throw failure('STATE','仅完成的任务可固定快照复现');await this.report(job);if(job.request.purpose!=='collect'&&job.engineHash!==this.fingerprint)throw failure('ENGINE_CHANGED','引擎已变更，无法按原版本复现');return this.create(null,{replay:job});}
-  async close(){this.stopping=true;if(this.active){this.active.controller.abort();await this.running;}await this.saves;await rm(this.lock,{recursive:true,force:true});}
+  async close(){this.stopping=true;await this.batchWrites.catch(()=>{});if(this.active){this.active.controller?.abort();await this.running;}await this.saves;await rm(this.lock,{recursive:true,force:true});}
   async fetch(request){
     try{const url=new URL(request.url),pathname=url.pathname,base='/api/research/jobs';
       if(pathname==='/api/research/sources'&&request.method==='GET')return jsonResponse(await this.sourceStatus());
       if(request.method==='POST'){const origin=request.headers.get('origin');if(origin&&origin!==url.origin)return jsonResponse({error:'只接受本站任务写入'},403);if(!request.headers.get('content-type')?.startsWith('application/json'))return jsonResponse({error:'需要JSON请求'},415);}
-      if(pathname===base&&request.method==='GET')return jsonResponse({jobs:[...this.jobs.values()].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(j=>this.view(j)),backend:'local',serial:true});
+      if(pathname===base&&request.method==='GET')return jsonResponse({jobs:[...this.jobs.values()].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(j=>this.view(j)),batches:[...this.batches.values()].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(b=>this.batchView(b)),backend:'local',serial:true});
       if(pathname===base&&request.method==='POST')return jsonResponse(await this.create(await request.json()),202);
+      if(pathname==='/api/research/batches'&&request.method==='POST')return jsonResponse(await this.createBatch(await request.json()),202);
+      const batchMatch=pathname.match(/^\/api\/research\/batches\/([a-f0-9]{24})(?:\/(pause|resume))?$/);if(batchMatch){const b=this.batches.get(batchMatch[1]);if(!b)return jsonResponse({error:'批次不存在'},404);if(!batchMatch[2]&&request.method==='GET')return jsonResponse(this.batchView(b));if(batchMatch[2]&&request.method==='POST')return jsonResponse(await this[batchMatch[2]+'Batch'](b.id),202);return jsonResponse({error:'批次方法不存在'},405);}
       const match=pathname.match(/^\/api\/research\/jobs\/([a-f0-9]{24})(?:\/(pause|resume|repeat|report|timing))?$/);if(!match)return jsonResponse({error:'任务接口不存在'},404);const job=this.jobs.get(match[1]);if(!job)return jsonResponse({error:'任务不存在'},404);
       if(!match[2]&&request.method==='GET')return jsonResponse(this.view(job));
       if(match[2]==='report'&&request.method==='GET')return new Response(await this.report(job),{headers:{'content-type':'application/json; charset=utf-8','content-disposition':'attachment; filename="'+job.id+'-report.json"','cache-control':'no-store','etag':'"'+job.reportHash+'"'}});
