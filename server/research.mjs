@@ -19,7 +19,7 @@ const failure=(code,message,details)=>Object.assign(Error(message),{code,details
 // Research jobs remain pinned to their strategy engine; collection-only jobs
 // never execute that engine. All collection responses are still revalidated.
 // Unknown pipelines still cannot reuse old work.
-const compatiblePipelines=new Set(['e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c']);
+const compatiblePipelines=new Set(['5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:canonical(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 export function yearStart(to){const d=new Date(to+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);d.setUTCFullYear(d.getUTCFullYear()-1);return d.toISOString().slice(0,10);}
 export function normalizeRequest(input){
@@ -82,7 +82,7 @@ export function auditAccounting(result,bundle){
   return {status:'passed',valuationPoints:checked,fees,checks:['order and corporate cash/share movements','cash + tradable/locked stock value + dividend receivable','order fee sum','final equity','signal availability','sellable quantity']};
 }
 async function engineHash(){const files=['engine.mjs','quality.mjs','data.mjs','rules.mjs','corporate.mjs','fees.mjs','inventory.mjs'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,'dist',f)))]);parts.push(['runner',hash(await readFile(path.join(project,'server/research-runner.mjs')))]);return hash(canonical(parts));}
-async function pipelineHash(){const files=['server/research.mjs','server/research-timing.mjs','collector/research_collect.py','collector/sources.py','collector/sync.py','collector/locking.py','collector/baostock_guard.py','collector/parquet_store.py'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,f)))]);return hash(canonical(parts));}
+async function pipelineHash(){const files=['server/research.mjs','server/research-timing.mjs','collector/research_collect.py','collector/query_cache.py','collector/sources.py','collector/sync.py','collector/locking.py','collector/baostock_guard.py','collector/parquet_store.py'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,f)))]);return hash(canonical(parts));}
 const jsonResponse=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 // Node decodes collector output as UTF-8; Windows pipe encodings must match.
 const pythonEnv=()=>({...process.env,PYTHONIOENCODING:'utf-8'});
@@ -160,6 +160,8 @@ export class ResearchManager {
   check(job){if(job.controller?.signal.aborted||this.stopping)throw failure('PAUSED','任务已暂停，断点保留');}
   async stage(job,stage,message){this.check(job);accrue(job,this.clock());job.stage=stage;await this.save(job,message);}
   async progress(job,p){
+    if(p.collectionPlan)job.collectionPlan=p.collectionPlan;
+    if(p.sourceUsage)job.sourceUsage=p.sourceUsage;
     job.progress=p;let message;
     if(p.collectionRange)job.collectionRange=p.collectionRange;
     if(p.stage==='blocked')job.collectorError=p;
@@ -169,7 +171,7 @@ export class ResearchManager {
       else if(p.queryElapsedMs!==undefined){
         const stats=job.queryTiming??={};const s=stats[p.query[0]]??={completed:0,failed:0,cached:0,elapsedMs:0,rateWaitMs:0,requests:0};
         s[p.phase==='query-error'?'failed':'completed']++;if(p.cached)s.cached++;s.elapsedMs+=p.queryElapsedMs;s.rateWaitMs+=p.rateWaitMs??0;s.requests+=p.requests??0;
-        message=`${p.phase==='query-error'?'查询中断':p.cached?'复用断点':'查询完成'}：${query} · ${p.rows??0} 行 · 耗时 ${(p.queryElapsedMs/1000).toFixed(3)}秒 · 限流等待 ${((p.rateWaitMs??0)/1000).toFixed(3)}秒 · SDK请求 ${p.requests??0} 次`;
+        message=`${p.phase==='query-error'?'查询中断':p.cacheOrigin==='shared'?'跨任务复用':p.cached?'复用断点':'查询完成'}：${query} · ${p.rows??0} 行 · 耗时 ${(p.queryElapsedMs/1000).toFixed(3)}秒 · 限流等待 ${((p.rateWaitMs??0)/1000).toFixed(3)}秒 · SDK请求 ${p.requests??0} 次`;
       }
     }else if(p.message)message=p.message;
     await this.save(job,message);
@@ -208,7 +210,7 @@ export class ResearchManager {
       // engine or claims HS300 research admission. Formal audit stays strict.
       job.acceptance=bundle.metadata.synthetic?'synthetic-test-only':job.quality.status==='passed'?'market-data-only':'market-data-incomplete';job.resultHash=id;
       await this.stage(job,'report','保存行情采集报告；未进行策略回测或指数成员资格校验');
-      await this.saveReport(job,{schemaVersion:1,acceptance:job.acceptance,input:{requestHash:job.requestHash,pipelineHash:job.pipelineHash,snapshotId:id},request:job.request,quality:job.quality,collection:{bars:bundle.bars.length,daily:bundle.daily.length,membershipChecked:false},limitations:['此报告仅确认行情采集和完整性，不是沪深300正式回测准入或盈利证明','存在资料问题时保留原始行情和问题清单，不补造缺失数据']});
+      await this.saveReport(job,{schemaVersion:1,acceptance:job.acceptance,input:{requestHash:job.requestHash,pipelineHash:job.pipelineHash,snapshotId:id},request:job.request,quality:job.quality,collection:{bars:bundle.bars.length,daily:bundle.daily.length,membershipChecked:false,incremental:bundle.metadata.incrementalPlan??null},limitations:['此报告仅确认行情采集和完整性，不是沪深300正式回测准入或盈利证明','存在资料问题时保留原始行情和问题清单，不补造缺失数据']});
       stopTiming(job,this.clock(),'completed');job.status='completed';job.stage='completed';delete job.error;await this.save(job,job.quality.status==='passed'?'行情采集完成，已入库；未查询指数成员、未运行回测':'行情已入库，存在资料问题，请查看报告');return;
     }
     const runConfig={...cfg,snapshotId:id};

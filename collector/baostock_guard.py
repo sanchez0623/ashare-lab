@@ -28,6 +28,10 @@ class TrafficGuard:
     def block(self):
         day=dt.datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat()
         with self.db:self.db.execute('UPDATE budget SET blocked=1 WHERE day=?',(day,))
+    def usage(self):
+        day=dt.datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat()
+        row=self.db.execute('SELECT count,blocked FROM budget WHERE day=?',(day,)).fetchone()
+        return {'day':day,'requests':row[0] if row else 0,'budget':self.limit,'blocked':bool(row and row[1]),'sessionRequests':self.session_requests}
     def close(self):self.db.close();self.lock.close()
 
 def install(guard):

@@ -148,10 +148,14 @@ const researchStage={queued:'排队',preflight:'环境检查',collect:'采集',v
 const researchState={queued:'等待执行',running:'运行中',paused:'已暂停',blocked:'受阻',failed:'核对失败',completed:'已完成'};
 function duration(ms){if(!Number.isFinite(ms))return '未记录';const s=Math.floor(Math.max(0,ms)/1000);return `${Math.floor(s/3600)}时${Math.floor(s%3600/60)}分${s%60}秒`;}
 const queryNames={calendar:'交易日历',basic:'证券资料',daily:'独立日线',factors:'复权因子',dividends:'公司行动',hs300:'历史沪深300名单',minute:'5分钟K线'};
+function researchIncremental(j){
+  const p=j.collectionPlan,u=j.sourceUsage;
+  return `${p?`<p class="task-timing">增量采集：跨任务复用 ${p.reusedTradingDays} 个交易日 · 分钟补采计划 ${p.plannedFetchQueries} 段（实际请求数见日志）</p>`:''}${u?`<p class="task-timing">BaoStock 日累计 ${u.requests} / ${u.budget} 次 · 北京时间 ${esc(u.day)} · 本机共享计数，含分页</p>`:''}`;
+}
 function researchTiming(j){
   const t=j.timing;if(!t)return '<p>旧任务尚无耗时记录，升级后开始累计。</p>';
   const current=t.runs?.at(-1);
-  return `<p class="task-timing">累计运行 ${duration(t.activeMs)} · 本次运行 ${duration(current?.activeMs??0)} · ${esc(researchStage[j.stage]||j.stage)}阶段累计 ${duration(t.stages?.[j.stage]??0)}${j.status==='running'?' · 每5秒保存计时':''}</p>${t.legacyUnmeasured?'<p>升级前耗时未记录；当前累计从升级后的执行开始。</p>':''}${t.interruptedTailUnmeasured?'<p>曾意外中断：保留最后落盘时间，未落盘的末尾片段无法补测。</p>':''}`;
+  return `<p class="task-timing">累计运行 ${duration(t.activeMs)} · 本次运行 ${duration(current?.activeMs??0)} · ${esc(researchStage[j.stage]||j.stage)}阶段累计 ${duration(t.stages?.[j.stage]??0)}${j.status==='running'?' · 每5秒保存计时':''}</p>${researchIncremental(j)}${t.legacyUnmeasured?'<p>升级前耗时未记录；当前累计从升级后的执行开始。</p>':''}${t.interruptedTailUnmeasured?'<p>曾意外中断：保留最后落盘时间，未落盘的末尾片段无法补测。</p>':''}`;
 }
 function researchTimingDetails(j){
   if(!j.timing)return '';
