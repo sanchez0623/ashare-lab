@@ -33,3 +33,9 @@ body{font-size:1rem}.config-content label,.section-label{font-size:.875rem}.two-
 .dataset-field{grid-column:1/-1}
 
 .research-form .research-wide-field{grid-column:1/-1}.research-form label[hidden]{display:none}.research-form textarea{font:inherit;resize:vertical;width:100%;min-height:106px;padding:12px;border:1px solid #dbe3df;border-radius:6px;line-height:1.6}.research-form .help{line-height:1.7}.research-batch{border:1px solid #bcdcd6;border-radius:8px;padding:16px;background:#f0f8f6;margin:16px 0}.research-batch h3{margin-bottom:8px}.batch-symbols{overflow-wrap:anywhere;max-height:100px;overflow:auto;margin-top:8px}.research-job-controls{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin:16px 0}.research-job-controls label{display:flex;flex-direction:column;gap:6px;min-width:0}.research-job-controls select{max-width:100%;font:inherit;border:1px solid #dbe3df;border-radius:6px;padding:9px;background:white}.research-job-paging{display:flex;align-items:center;flex-wrap:wrap;gap:12px;font-size:12px}
+
+/* The compact backtest panel cannot fit two native date controls side by side. */
+.config-panel{container-type:inline-size}
+.config-content input[type=date]{min-width:0;font-variant-numeric:tabular-nums}
+@media(max-width:1200px){.config-content>.two-fields{grid-template-columns:minmax(0,1fr)}}
+@container (max-width:360px){.config-content>.two-fields{grid-template-columns:minmax(0,1fr)}}
