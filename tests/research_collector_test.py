@@ -38,6 +38,27 @@ class FakeSDK:
         return Result(rows)
 
 class ResearchCollectorTests(unittest.TestCase):
+    def test_collection_only_never_queries_membership_and_timing_does_not_change_evidence(self):
+        request={'symbol':'600519','board':'main','purpose':'collect','from':'2024-05-01','to':'2025-04-30','warmupSessions':60}
+        with tempfile.TemporaryDirectory() as root:
+            bs=FakeSDK();bs.fail=False;events=[];base=pathlib.Path(root)
+            with patch.object(bs,'query_hs300_stocks',side_effect=AssertionError('仅采集不应查询成分')):
+                first=collect(request,base/'job',base/'market',emit=events.append,bs=bs)
+                body=(base/'job/bundle.json').read_bytes();collect(request,base/'job',base/'market',emit=events.append,bs=bs)
+                self.assertEqual((base/'job/bundle.json').read_bytes(),body)
+            self.assertEqual(first['universe'],[]);self.assertEqual(first['metadata']['universe'],'SINGLE_SECURITY')
+            self.assertEqual(first['metadata']['coverage']['universe']['status'],'not-requested')
+            self.assertFalse(any(p['query'][0]=='hs300' for p in first['metadata']['provenance']['queries'].values()))
+            completed=[e for e in events if e.get('phase')=='query-complete'];self.assertTrue(completed)
+            self.assertTrue(all(e['queryElapsedMs']>=0 and e['rateWaitMs']>=0 for e in completed));self.assertTrue(any(e['cached'] for e in completed))
+            self.assertFalse(any('queryElapsedMs' in p for p in first['metadata']['provenance']['queries'].values()))
+    def test_partial_query_logs_elapsed_but_never_saves_a_completed_checkpoint(self):
+        with tempfile.TemporaryDirectory() as root:
+            events=[];cache=Checkpoints(root,emit=events.append)
+            def fail():raise RuntimeError('中断测试')
+            with self.assertRaisesRegex(RuntimeError,'中断测试'):cache.query(['minute','partial'],fail)
+            self.assertEqual([e['phase'] for e in events],['query-start','query-error']);self.assertGreaterEqual(events[-1]['queryElapsedMs'],0)
+            self.assertEqual(cache.proofs,{});self.assertEqual(list(pathlib.Path(root).glob('*.json')),[])
     def test_checkpoint_hash_and_partial_response(self):
         with tempfile.TemporaryDirectory() as root:
             cache=Checkpoints(root);count=[0]

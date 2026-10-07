@@ -14,6 +14,16 @@ class CollectTests(unittest.TestCase):
    g.close();g=TrafficGuard(path,limit=2)
    with self.assertRaisesRegex(RuntimeError,'预算'):g.reserve()
    g.close()
+ def test_wait_and_sdk_send_counters_measure_actual_throttle_without_raising_limits(self):
+  with tempfile.TemporaryDirectory() as root:
+   g=TrafficGuard(pathlib.Path(root)/'budget.db',limit=2)
+   try:
+    with patch('baostock_guard.time.time',return_value=100),patch('baostock_guard.time.sleep') as sleep,patch('baostock_guard.time.perf_counter',side_effect=[10,11]):
+     g.reserve();g.reserve();self.assertEqual(sleep.call_count,1)
+    self.assertEqual(g.session_requests,2);self.assertEqual(g.session_wait_ms,1000)
+    with self.assertRaisesRegex(RuntimeError,'预算'):g.reserve()
+    self.assertEqual(g.session_requests,2)
+   finally:g.close()
  def test_blocked_sdk_does_not_retry_or_send_again(self):
   import baostock.util.socketutil as sock
   with tempfile.TemporaryDirectory() as root:

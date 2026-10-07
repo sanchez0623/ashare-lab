@@ -7,12 +7,16 @@ import {Worker} from 'node:worker_threads';
 import {defaults,validate} from '../dist/engine.mjs';
 import {auditBundle} from '../dist/quality.mjs';
 import {resampleData} from '../dist/data.mjs';
+import {ensureTiming,accrue,startTiming,stopTiming,timingView,iso} from './research-timing.mjs';
 
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 export const canonical=value=>JSON.stringify(value,(_key,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
 export const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const now=()=>new Date().toISOString(),date=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s;
 const failure=(code,message,details)=>Object.assign(Error(message),{code,details});
+// Only this reviewed predecessor has identical research-mode query identities,
+// output semantics and engine. Unknown pipelines still cannot reuse old work.
+const compatiblePipeline='5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967';
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:canonical(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 export function yearStart(to){const d=new Date(to+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);d.setUTCFullYear(d.getUTCFullYear()-1);return d.toISOString().slice(0,10);}
 export function normalizeRequest(input){
@@ -35,10 +39,11 @@ export function normalizeRequest(input){
   validate(cfg);
   const warmupSessions=Math.max(60,cfg.dailySlow,cfg.breakout+1,cfg.exitPeriod,cfg.atrPeriod,cfg.confirmationDays+1,Math.ceil(Math.max(cfg.slow,35,cfg.rsiPeriod+1,cfg.bbPeriod)/(cfg.timeframe==='5m'?48:16))+1);
   const budget=input.budget??10000;if(!Number.isInteger(budget)||budget<1||budget>40000)throw failure('REQUEST','日预算须为1至40000，默认10000');
-  return {schemaVersion:1,symbol,board,rangeMode,from,to:input.to,warmupSessions,budget,provider:'baostock',config:cfg};
+  const purpose=input.purpose??'research';if(!['collect','research'].includes(purpose))throw failure('REQUEST','任务用途须为collect或research');
+  return {schemaVersion:1,symbol,board,purpose,rangeMode,from,to:input.to,warmupSessions,budget,provider:'baostock',config:cfg};
 }
 export function acceptanceAudit(bundle,request){
-  const quality=auditBundle(bundle),issues=[...quality.issues],add=(code,message)=>issues.push({code,message,count:1,samples:[]});
+  const collectOnly=request.purpose==='collect',quality=auditBundle(bundle),issues=quality.issues.filter(i=>!collectOnly||!i.code.startsWith('UNIVERSE_')),add=(code,message)=>issues.push({code,message,count:1,samples:[]});
   const m=bundle.metadata??{},rows=bundle.bars??[];
   if(m.symbol!==request.symbol||m.board!==request.board)add('IDENTITY','数据包证券或板块不符');
   if(m.timeframe!=='5m')add('NATIVE_5M','验收必须使用原生5分钟，禁止拆分日线或15分钟');
@@ -49,9 +54,9 @@ export function acceptanceAudit(bundle,request){
   const warm=(bundle.calendar??[]).filter(d=>d>=m.requested?.from&&d<request.from&&d>=m.listedDate);
   if(warm.length<request.warmupSessions)add('WARMUP','完整预热交易日不足：需要'+request.warmupSessions+'日');
   const code=(request.symbol.startsWith('6')?'sh.':'sz.')+request.symbol;
-  if(!(bundle.universe??[]).some(u=>u.date>=request.from&&u.date<=request.to&&u.codes?.includes(code)))add('HISTORICAL_MEMBER','研究区间内未证明曾为沪深300成分股');
+  if(!collectOnly&&!(bundle.universe??[]).some(u=>u.date>=request.from&&u.date<=request.to&&u.codes?.includes(code)))add('HISTORICAL_MEMBER','研究区间内未证明曾为沪深300成分股');
   if(!rows.some(r=>r.date.slice(0,10)>=request.from&&r.date.slice(0,10)<=request.to))add('RESEARCH_EMPTY','研究区间无分钟数据');
-  return {...quality,status:issues.length?'blocked':'passed',issues,warmupSessions:warm.length,requiredWarmup:request.warmupSessions,research:{from:request.from,to:request.to},synthetic:m.synthetic===true};
+  return {...quality,status:issues.length?'blocked':'passed',...(collectOnly?{scope:'market-data-only',label:issues.length?'行情已保存，存在资料问题':'行情完整性校验通过，未核验指数成员'}:{}),issues,warmupSessions:warm.length,requiredWarmup:request.warmupSessions,research:{from:request.from,to:request.to},synthetic:m.synthetic===true};
 }
 // Separate accounting checks use raw closing prices, quantities and fees from
 // saved outputs. This is deliberately independent of the engine's NAV formula.
@@ -74,11 +79,11 @@ export function auditAccounting(result,bundle){
   return {status:'passed',valuationPoints:checked,fees,checks:['order and corporate cash/share movements','cash + tradable/locked stock value + dividend receivable','order fee sum','final equity','signal availability','sellable quantity']};
 }
 async function engineHash(){const files=['engine.mjs','quality.mjs','data.mjs','rules.mjs','corporate.mjs','fees.mjs','inventory.mjs'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,'dist',f)))]);parts.push(['runner',hash(await readFile(path.join(project,'server/research-runner.mjs')))]);return hash(canonical(parts));}
-async function pipelineHash(){const files=['server/research.mjs','collector/research_collect.py','collector/sources.py','collector/sync.py','collector/locking.py','collector/baostock_guard.py','collector/parquet_store.py'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,f)))]);return hash(canonical(parts));}
+async function pipelineHash(){const files=['server/research.mjs','server/research-timing.mjs','collector/research_collect.py','collector/sources.py','collector/sync.py','collector/locking.py','collector/baostock_guard.py','collector/parquet_store.py'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,f)))]);return hash(canonical(parts));}
 const jsonResponse=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 
 export class ResearchManager {
-  constructor({root,bucket,collector,runner}={}){this.root=path.resolve(root);this.bucket=bucket;this.collector=collector;this.runner=runner;this.jobs=new Map();this.active=null;this.stopping=false;this.saves=Promise.resolve();}
+  constructor({root,bucket,collector,runner,clock=Date.now,heartbeatMs=5000}={}){this.root=path.resolve(root);this.bucket=bucket;this.collector=collector;this.runner=runner;this.clock=clock;this.heartbeatMs=heartbeatMs;this.jobs=new Map();this.active=null;this.stopping=false;this.saves=Promise.resolve();}
   location(id,name){if(!/^[a-f0-9]{24}$/.test(id))throw failure('NOT_FOUND','任务不存在');return path.join(this.root,'jobs',id,name);}
   async init(){
     await mkdir(this.root,{recursive:true});this.lock=path.join(this.root,'.controller-lock');this.owner=randomUUID();
@@ -91,43 +96,66 @@ export class ResearchManager {
     for(const id of await readdir(path.join(this.root,'jobs'))){if(!/^[a-f0-9]{24}$/.test(id))continue;
       try{const state=JSON.parse(await readFile(this.location(id,'state.json'),'utf8'));const raw=await readFile(this.location(id,'request.json'),'utf8');
         if(hash(raw)!==state.requestHash)throw Error('任务请求哈希不符');state.request=JSON.parse(raw);this.jobs.set(id,state);
-        if(state.status==='running'){state.status='queued';state.recoveryCount=(state.recoveryCount??0)+1;await this.save(state,'服务中断后自动恢复；复用已完成分段');}
+        ensureTiming(state);
+        if(state.status==='running'){stopTiming(state,this.clock(),'interrupted',{recovered:true});state.status='queued';state.recoveryCount=(state.recoveryCount??0)+1;await this.save(state,'服务中断后自动恢复；累计时间截至最后落盘心跳，停机期间不计时；复用已完成分段');}
       }catch(e){const state={id,status:'failed',stage:'recovery',createdAt:now(),updatedAt:now(),events:[],error:{code:'JOB_INTEGRITY',message:e.message}};this.jobs.set(id,state);}
     }
     this.pump();return this;
   }
-  async save(job,message){job.updatedAt=now();if(message){job.events??=[];job.events.push({at:job.updatedAt,stage:job.stage,message});job.events=job.events.slice(-80);}
-    const copy=JSON.parse(JSON.stringify(job));delete copy.request;delete copy.controller;this.saves=this.saves.catch(()=>{}).then(()=>atomic(this.location(job.id,'state.json'),copy));await this.saves;
+  async save(job,message){const at=this.clock();accrue(job,at);job.updatedAt=iso(at);let event;
+    if(message){event={at:job.updatedAt,stage:job.stage,message,activeMs:job.timing.activeMs,stageMs:job.timing.stages[job.stage]??0,run:job.timing.runs.length};job.events??=[];job.events.push(event);job.events=job.events.slice(-80);}
+    const copy=JSON.parse(JSON.stringify(job));delete copy.request;delete copy.controller;this.saves=this.saves.catch(()=>{}).then(async()=>{await atomic(this.location(job.id,'state.json'),copy);if(event)await writeFile(this.location(job.id,'events.jsonl'),canonical(event)+'\n',{flag:'a'});});await this.saves;
   }
-  view(job){const {controller,...value}=job;return {...value,events:job.events??[]};}
+  view(job){const {controller,...value}=job;return {...value,timing:timingView(job,this.clock()),events:job.events??[]};}
   async create(input,{replay}={}){
     const request=replay?replay.request:normalizeRequest(input),id=randomUUID().replaceAll('-','').slice(0,24),bytes=canonical(request);
-    const job={id,request,requestHash:hash(bytes),engineHash:replay?.engineHash??this.fingerprint,pipelineHash:replay?.pipelineHash??this.pipelineFingerprint,configHash:hash(canonical(request.config)),status:'queued',stage:'queued',createdAt:now(),updatedAt:now(),events:[],recoveryCount:0};
+    const job={id,request,requestHash:hash(bytes),engineHash:replay?.engineHash??this.fingerprint,pipelineHash:replay?.pipelineHash??this.pipelineFingerprint,configHash:hash(canonical(request.config)),status:'queued',stage:'queued',createdAt:iso(this.clock()),updatedAt:iso(this.clock()),events:[],recoveryCount:0,timing:{version:1,activeMs:0,stages:{},runs:[],accountedAt:null}};
     if(replay){job.snapshotId=replay.snapshotId;job.expectedResultHash=replay.resultHash;job.replayOf=replay.id;}
     await atomic(this.location(id,'request.json'),bytes);await this.save(job,'任务已保存，等待串行执行');this.jobs.set(id,job);this.pump();return this.view(job);
   }
   pump(){if(this.active||this.stopping)return;const job=[...this.jobs.values()].filter(j=>j.status==='queued').sort((a,b)=>a.createdAt.localeCompare(b.createdAt))[0];if(!job)return;
-    this.active=job;job.status='running';job.controller=new AbortController();
-    this.running=this.execute(job).catch(async e=>{const paused=job.controller.signal.aborted||e.code==='PAUSED';job.status=paused?'paused':e.code==='ACCOUNTING'||e.code==='REPRODUCIBILITY'||e.code==='SNAPSHOT_HASH'?'failed':'blocked';job.error={code:e.code??'TASK_ERROR',message:e.message,...(e.details?{details:e.details}:{})};delete job.controller;await this.save(job,e.message);if(!paused)await this.saveReport(job,{schemaVersion:1,acceptance:'blocked',input:{requestHash:job.requestHash,configHash:job.configHash,engineHash:job.engineHash,pipelineHash:job.pipelineHash,snapshotId:job.snapshotId??null},request:job.request,error:job.error,quality:job.quality??null});}).finally(()=>{delete job.controller;this.active=null;this.pump();});
+    this.active=job;job.status='running';job.controller=new AbortController();startTiming(job,this.clock());
+    const heartbeat=setInterval(()=>{if(job.status==='running')this.save(job).catch(()=>{});},this.heartbeatMs);heartbeat.unref();
+    this.running=this.execute(job).catch(async e=>{const paused=job.controller.signal.aborted||e.code==='PAUSED';const status=paused?'paused':e.code==='ACCOUNTING'||e.code==='REPRODUCIBILITY'||e.code==='SNAPSHOT_HASH'?'failed':'blocked';stopTiming(job,this.clock(),status);job.status=status;job.error={code:e.code??'TASK_ERROR',message:e.message,...(e.details?{details:e.details}:{})};delete job.controller;await this.save(job,e.message);if(!paused)await this.saveReport(job,{schemaVersion:1,acceptance:'blocked',input:{requestHash:job.requestHash,configHash:job.configHash,engineHash:job.engineHash,pipelineHash:job.pipelineHash,snapshotId:job.snapshotId??null},request:job.request,error:job.error,quality:job.quality??null});}).finally(()=>{clearInterval(heartbeat);delete job.controller;this.active=null;this.pump();});
   }
   check(job){if(job.controller?.signal.aborted||this.stopping)throw failure('PAUSED','任务已暂停，断点保留');}
-  async stage(job,stage,message){this.check(job);job.stage=stage;await this.save(job,message);}
+  async stage(job,stage,message){this.check(job);accrue(job,this.clock());job.stage=stage;await this.save(job,message);}
+  async progress(job,p){
+    job.progress=p;let message;
+    if(p.stage==='blocked')job.collectorError=p;
+    if(p.query){
+      const query=p.query.join(' / ');
+      if(p.phase==='query-start')message=(p.cached?'校验缓存：':'开始查询：')+query;
+      else if(p.queryElapsedMs!==undefined){
+        const stats=job.queryTiming??={};const s=stats[p.query[0]]??={completed:0,failed:0,cached:0,elapsedMs:0,rateWaitMs:0,requests:0};
+        s[p.phase==='query-error'?'failed':'completed']++;if(p.cached)s.cached++;s.elapsedMs+=p.queryElapsedMs;s.rateWaitMs+=p.rateWaitMs??0;s.requests+=p.requests??0;
+        message=`${p.phase==='query-error'?'查询中断':p.cached?'复用断点':'查询完成'}：${query} · ${p.rows??0} 行 · 耗时 ${(p.queryElapsedMs/1000).toFixed(3)}秒 · 限流等待 ${((p.rateWaitMs??0)/1000).toFixed(3)}秒 · SDK请求 ${p.requests??0} 次`;
+      }
+    }else if(p.message)message=p.message;
+    await this.save(job,message);
+  }
   async execute(job){
     await this.stage(job,'preflight','检查固定输入和引擎版本');
     if(hash(await readFile(this.location(job.id,'request.json')))!==job.requestHash)throw failure('REQUEST_HASH','任务参数文件发生变化');
     if(job.engineHash!==await engineHash())throw failure('ENGINE_CHANGED','引擎代码已改变。旧任务不能用新引擎静默恢复，请创建新任务');
     // An immutable snapshot needs no collection checkpoints. Keep its original
     // provenance while still checking the request, snapshot and engine hashes.
-    if(!job.snapshotId&&job.pipelineHash!==await pipelineHash())throw failure('PIPELINE_CHANGED','采集或验收代码已改变，不能与旧断点混用，请创建新任务');
+    const currentPipeline=await pipelineHash();
+    if(!job.snapshotId&&job.pipelineHash!==currentPipeline){
+      if(job.pipelineHash===compatiblePipeline&&(job.request.purpose??'research')==='research'){
+        job.pipelineMigrations??=[];job.pipelineMigrations.push({from:job.pipelineHash,to:currentPipeline,at:iso(this.clock()),reason:'计时与独立行情模式升级；原研究查询、数据口径和引擎未变'});job.pipelineHash=currentPipeline;
+        await this.save(job,'兼容升级原研究任务；保留原用途及已校验查询断点，升级前耗时无法补测');
+      }else throw failure('PIPELINE_CHANGED','采集或验收代码已改变，不能与旧断点混用，请创建新任务');
+    }
     const cfg=job.request.config,collection=this.location(job.id,'collection');let bundle,bytes;
     if(job.snapshotId){const object=await this.bucket.get('snapshots/'+job.snapshotId+'.json');if(!object)throw failure('SNAPSHOT_MISSING','固定行情快照不存在');bytes=Buffer.from(object.body);if(hash(bytes)!==job.snapshotId)throw failure('SNAPSHOT_HASH','固定行情快照哈希不一致');bundle=JSON.parse(bytes);}
     else {
-      await this.stage(job,'collect','采集原生5分钟及日线、历史状态、成分和公司行动');await mkdir(collection,{recursive:true});await rm(path.join(collection,'cancel'),{force:true});
-      if(this.collector){bundle=await this.collector(job.request,collection,job.controller.signal,async p=>{job.progress=p;await this.save(job);});bytes=Buffer.from(canonical(bundle));}
+      await this.stage(job,'collect',job.request.purpose==='collect'?'采集指定证券原生5分钟、日线、历史状态和公司行动；不查询沪深300成员':'采集原生5分钟及日线、历史状态、成分和公司行动');await mkdir(collection,{recursive:true});await rm(path.join(collection,'cancel'),{force:true});
+      if(this.collector){bundle=await this.collector(job.request,collection,job.controller.signal,p=>this.progress(job,p));bytes=Buffer.from(canonical(bundle));}
       else {await this.collectPython(job,collection);bytes=await readFile(path.join(collection,'bundle.json'));const receipt=JSON.parse(await readFile(path.join(collection,'receipt.json'),'utf8'));if(hash(bytes)!==receipt.sha256)throw failure('CACHE_HASH','采集结果与检查点回执不符');bundle=JSON.parse(bytes);bytes=Buffer.from(canonical(bundle));}
     }
     await this.stage(job,'validate','逐日核验48根原生5分钟、日线量价、历史ST、预热及除权因子');job.quality=acceptanceAudit(bundle,job.request);await this.save(job);
-    if(job.quality.status!=='passed')throw failure('DATA_ADMISSION','资料未通过正式准入；保留缺口报告',job.quality.issues);
+    if(job.quality.status!=='passed'&&job.request.purpose!=='collect')throw failure('DATA_ADMISSION','资料未通过正式准入；保留缺口报告',job.quality.issues);
     await this.stage(job,'ingest','保存不可变行情快照并读回核对SHA-256');const id=hash(bytes);
     const old=await this.bucket.get('snapshots/'+id+'.json');if(old&&hash(Buffer.from(old.body))!==id)throw failure('SNAPSHOT_HASH','仓库已有对象哈希不符');
     if(!old)await this.bucket.put('snapshots/'+id+'.json',bytes);
@@ -135,13 +163,21 @@ export class ResearchManager {
     if(!await this.bucket.get('manifests/'+id+'.json'))await this.bucket.put('manifests/'+id+'.json',canonical(manifest));
     if(hash(Buffer.from((await this.bucket.get('snapshots/'+id+'.json')).body))!==id)throw failure('SNAPSHOT_HASH','入库后读回核对失败');job.snapshotId=id;await this.save(job);
     const snapshot=this.location(job.id,'input.json');await atomic(snapshot,bytes.toString('utf8'));
+    if(job.request.purpose==='collect'){
+      // Collection preserves incomplete raw evidence too, but never runs the
+      // engine or claims HS300 research admission. Formal audit stays strict.
+      job.acceptance=bundle.metadata.synthetic?'synthetic-test-only':job.quality.status==='passed'?'market-data-only':'market-data-incomplete';job.resultHash=id;
+      await this.stage(job,'report','保存行情采集报告；未进行策略回测或指数成员资格校验');
+      await this.saveReport(job,{schemaVersion:1,acceptance:job.acceptance,input:{requestHash:job.requestHash,pipelineHash:job.pipelineHash,snapshotId:id},request:job.request,quality:job.quality,collection:{bars:bundle.bars.length,daily:bundle.daily.length,membershipChecked:false},limitations:['此报告仅确认行情采集和完整性，不是沪深300正式回测准入或盈利证明','存在资料问题时保留原始行情和问题清单，不补造缺失数据']});
+      stopTiming(job,this.clock(),'completed');job.status='completed';job.stage='completed';delete job.error;await this.save(job,job.quality.status==='passed'?'行情采集完成，已入库；未查询指数成员、未运行回测':'行情已入库，存在资料问题，请查看报告');return;
+    }
     const runConfig={...cfg,snapshotId:id};
     await this.stage(job,'backtest','后台运行回测；网页关闭后任务仍继续');const first=await this.runEngine(job,snapshot,runConfig);this.check(job);
     await this.stage(job,'verify','使用同一快照和参数独立重跑，并核对资产及费用');const second=await this.runEngine(job,snapshot,runConfig);const firstHash=hash(canonical(first)),secondHash=hash(canonical(second));
     if(firstHash!==secondHash||job.expectedResultHash&&firstHash!==job.expectedResultHash)throw failure('REPRODUCIBILITY','相同输入得到不同结果，验收失败');
     const accounting=auditAccounting(first,bundle);job.resultHash=firstHash;job.acceptance=bundle.metadata.synthetic?'synthetic-test-only':'passed';
     const report={schemaVersion:1,acceptance:job.acceptance,input:{requestHash:job.requestHash,configHash:job.configHash,engineHash:job.engineHash,pipelineHash:job.pipelineHash,snapshotId:id,runtime:{node:process.versions.node}},request:job.request,quality:job.quality,reproducibility:{status:'passed',runs:2,resultHash:firstHash,repeatedHash:secondHash},accounting,result:first,limitations:['历史沪深300成员按BaoStock周度快照；不证明交易所逐事件历史可得性','公司行动资料不完整或遇到未支持的配股时阻止正式回测','单标的历史样本不保证盈利；未平仓和未配对T均保留在报告']};
-    await this.stage(job,'report','保存完整报告、交易明细与净值曲线');await this.saveReport(job,report);job.metrics=first.metrics;job.status='completed';job.stage='completed';delete job.error;await this.save(job,job.acceptance==='passed'?'真实数据流程验收通过（不代表策略盈利）':'合成夹具流程测试完成，不属于真实数据验收');
+    await this.stage(job,'report','保存完整报告、交易明细与净值曲线');await this.saveReport(job,report);job.metrics=first.metrics;stopTiming(job,this.clock(),'completed');job.status='completed';job.stage='completed';delete job.error;await this.save(job,job.acceptance==='passed'?'真实数据流程验收通过（不代表策略盈利）':'合成夹具流程测试完成，不属于真实数据验收');
   }
   async saveReport(job,report){const bytes=canonical(report),id=hash(bytes);await atomic(path.join(this.root,'reports',id+'.json'),bytes);job.reportHash=id;await this.save(job);}
   async python(){if(process.env.ASHARE_PYTHON)return process.env.ASHARE_PYTHON;for(const base of ['collector/.venv','.venv']){const venv=path.join(project,base,process.platform==='win32'?'Scripts/python.exe':'bin/python');try{await access(venv);return venv;}catch{}}return process.platform==='win32'?'python':'python3';}
@@ -160,7 +196,7 @@ export class ResearchManager {
     const executable=await this.python();await rm(path.join(collection,'error.json'),{force:true});
     const child=spawn(executable,[path.join(project,'collector/research_collect.py'),'--request',this.location(job.id,'request.json'),'--root',collection,'--store',path.join(this.root,'market'),'--parent',String(process.pid)],{cwd:project,windowsHide:true,stdio:['ignore','pipe','pipe']});this.child=child;
     let pending='',stderr='';const abort=()=>{writeFile(path.join(collection,'cancel'),'pause').catch(()=>{});child.kill();};job.controller.signal.addEventListener('abort',abort,{once:true});
-    child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{pending+=chunk;if(pending.length>1024*1024)pending=pending.slice(-65536);let index;while((index=pending.indexOf('\n'))!==-1){const line=pending.slice(0,index);pending=pending.slice(index+1);try{const p=JSON.parse(line);job.progress=p;if(p.stage==='blocked')job.collectorError=p;this.save(job).catch(()=>{});}catch{}}});
+    child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{pending+=chunk;if(pending.length>1024*1024)pending=pending.slice(-65536);let index;while((index=pending.indexOf('\n'))!==-1){const line=pending.slice(0,index);pending=pending.slice(index+1);try{const p=JSON.parse(line);this.progress(job,p).catch(()=>{});}catch{}}});
     child.stderr.setEncoding('utf8');child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-4000);});
     try{await new Promise((resolve,reject)=>{child.once('error',e=>reject(failure('PYTHON_MISSING','无法启动Python。安装依赖，或设置ASHARE_PYTHON：'+e.code)));child.once('close',code=>code===0?resolve():reject(failure('COLLECTOR_ERROR','采集器中断：'+(stderr.includes('ModuleNotFoundError')?'缺少Python依赖，请安装collector/requirements.txt':'退出码 '+code))));});}
     catch(e){this.check(job);let detail;try{detail=JSON.parse(await readFile(path.join(collection,'error.json'),'utf8'));}catch{}throw detail?failure(detail.code,detail.error):e;}
@@ -186,9 +222,13 @@ export class ResearchManager {
       if(request.method==='POST'){const origin=request.headers.get('origin');if(origin&&origin!==url.origin)return jsonResponse({error:'只接受本站任务写入'},403);if(!request.headers.get('content-type')?.startsWith('application/json'))return jsonResponse({error:'需要JSON请求'},415);}
       if(pathname===base&&request.method==='GET')return jsonResponse({jobs:[...this.jobs.values()].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(j=>this.view(j)),backend:'local',serial:true});
       if(pathname===base&&request.method==='POST')return jsonResponse(await this.create(await request.json()),202);
-      const match=pathname.match(/^\/api\/research\/jobs\/([a-f0-9]{24})(?:\/(pause|resume|repeat|report))?$/);if(!match)return jsonResponse({error:'任务接口不存在'},404);const job=this.jobs.get(match[1]);if(!job)return jsonResponse({error:'任务不存在'},404);
+      const match=pathname.match(/^\/api\/research\/jobs\/([a-f0-9]{24})(?:\/(pause|resume|repeat|report|timing))?$/);if(!match)return jsonResponse({error:'任务接口不存在'},404);const job=this.jobs.get(match[1]);if(!job)return jsonResponse({error:'任务不存在'},404);
       if(!match[2]&&request.method==='GET')return jsonResponse(this.view(job));
       if(match[2]==='report'&&request.method==='GET')return new Response(await this.report(job),{headers:{'content-type':'application/json; charset=utf-8','content-disposition':'attachment; filename="'+job.id+'-report.json"','cache-control':'no-store','etag':'"'+job.reportHash+'"'}});
+      if(match[2]==='timing'&&request.method==='GET'){
+        await this.saves;let events=[];try{events=(await readFile(this.location(job.id,'events.jsonl'),'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);}catch(e){if(e.code!=='ENOENT')throw e;}
+        return new Response(JSON.stringify({id:job.id,status:job.status,stage:job.stage,timing:timingView(job,this.clock()),queryTiming:job.queryTiming??{},events:events.length?events:job.events,notes:['activeMs只包含实际执行，包括网络与限流等待；暂停、排队、停机时间不计入','每5秒落盘；异常退出最多缺少最后未落盘片段，标记interruptedTailUnmeasured','legacyUnmeasured表示升级前没有计时，旧耗时无法补测','耗时与日志独立于确定性回测报告哈希']}),{headers:{'content-type':'application/json; charset=utf-8','content-disposition':'attachment; filename="'+job.id+'-timing.json"','cache-control':'no-store'}});
+      }
       if(['pause','resume','repeat'].includes(match[2])&&request.method==='POST')return jsonResponse(await this[match[2]](job.id),202);
       return jsonResponse({error:'任务方法不存在'},405);
     }catch(e){return jsonResponse({error:e.message,code:e.code??'TASK_ERROR'},e.code==='NOT_FOUND'?404:e.code==='REQUEST'||e.message.includes('参数')?400:409);}

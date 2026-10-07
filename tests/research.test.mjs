@@ -25,6 +25,58 @@ test('research dates preserve the year default and accept explicit or inferred c
  const today=new Date(Date.now()+8*3600000).toISOString().slice(0,10);assert.throws(()=>normalizeRequest({...req,to:today}),/北京时间今天/);
  assert.equal(normalizeRequest({...req,from:'2024-01-01',config:{dailySlow:120}}).warmupSessions,120);
 });
+test('collection-only persists raw data without membership or backtest; formal admission remains strict',async()=>{
+ const b=dataset();b.universe=[];b.metadata.universe='SINGLE_SECURITY';b.metadata.coverage.universe={status:'not-requested'};
+ let runs=0;const ctx=await setup(async()=>b);ctx.manager.runner=async()=>{runs++;throw Error('仅采集不可回测');};
+ try{
+  const req={...input(b),purpose:'collect'},j=await ctx.manager.create(req),done=await until(ctx.manager,j.id);
+  assert.equal(done.status,'completed',JSON.stringify(done.error));assert.equal(runs,0);assert.equal(done.quality.status,'passed');assert.equal(done.quality.scope,'market-data-only');assert.ok(done.snapshotId);
+  const report=JSON.parse(await ctx.manager.report(done));assert.equal(report.collection.membershipChecked,false);assert.equal(report.result,undefined);assert.equal(report.timing,undefined);
+  const replay=await ctx.manager.repeat(done.id),again=await until(ctx.manager,replay.id);assert.equal(again.reportHash,done.reportHash);
+  const formal=await ctx.manager.create(input(b)),blocked=await until(ctx.manager,formal.id);assert.equal(blocked.status,'blocked');assert.ok(blocked.quality.issues.some(i=>i.code==='HISTORICAL_MEMBER'));
+  // Gaps remain visible and raw evidence downloadable in collection-only mode.
+  b.bars=b.bars.filter(r=>!r.date.startsWith(b.calendar[180]));const incomplete=await ctx.manager.create(req),saved=await until(ctx.manager,incomplete.id);
+  assert.equal(saved.status,'completed');assert.equal(saved.quality.status,'blocked');assert.ok(saved.quality.issues.some(i=>i.code==='MISSING_DAYS'));assert.ok(saved.snapshotId);assert.equal(runs,0);
+  assert.throws(()=>normalizeRequest({...req,purpose:'unknown'}),e=>e.code==='REQUEST');
+ }finally{await ctx.manager.close();await rm(ctx.dir,{recursive:true,force:true});}
+});
+test('job timing and query diagnostics persist over pause/restart and stay separate from result reports',async()=>{
+ const b=dataset(),dir=await mkdtemp(path.join(tmpdir(),'ashare-timing-')),bucket=new FileBucket(path.join(dir,'warehouse'));let tick=100000,waiting=true;
+ const collect=async(_r,_p,signal,progress)=>{
+  tick+=2000;await progress({query:['minute','month'],phase:'query-complete',queryElapsedMs:2000,requests:2,rateWaitMs:1000,rows:10,checkpoints:1});
+  if(waiting)await new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Object.assign(Error('暂停'),{code:'PAUSED'})),{once:true}));return b;
+ };
+ let m=await new ResearchManager({root:path.join(dir,'research'),bucket,collector:collect,clock:()=>tick}).init();
+ try{
+  const j=await m.create({...input(b),purpose:'collect'});for(let i=0;i<100&&!m.jobs.get(j.id).progress;i++)await new Promise(r=>setTimeout(r,10));
+  tick+=3000;const paused=await m.pause(j.id);assert.equal(paused.timing.activeMs,5000);assert.equal(paused.timing.runs[0].stopReason,'paused');await m.close();
+  const statePath=m.location(j.id,'state.json'),state=JSON.parse(await readFile(statePath,'utf8'));assert.equal(state.timing.activeMs,5000);
+  tick+=86400000;waiting=false;m=await new ResearchManager({root:path.join(dir,'research'),bucket,collector:collect,clock:()=>tick}).init();assert.equal(m.view(m.jobs.get(j.id)).timing.activeMs,5000);
+  await m.resume(j.id);const done=await until(m,j.id);assert.equal(done.timing.activeMs,7000);assert.equal(done.timing.runs.length,2);assert.equal(done.queryTiming.minute.rateWaitMs,2000);assert.equal(done.queryTiming.minute.requests,4);
+  const response=await m.fetch(new Request('http://localhost/api/research/jobs/'+j.id+'/timing')),log=await response.json();assert.equal(log.timing.activeMs,7000);assert.ok(log.events.some(e=>e.message.includes('查询完成')));assert.ok(log.events.every(e=>typeof e.activeMs==='number'));
+  const report=JSON.parse(await m.report(done));assert.equal(report.timing,undefined);assert.equal(report.result,undefined);
+ }finally{await m.close();await rm(dir,{recursive:true,force:true});}
+});
+test('only the reviewed legacy pipeline can migrate and reuse original research checkpoints',async()=>{
+ const b=dataset(),ctx=await setup(async()=>b);
+ try{
+  ctx.manager.pipelineFingerprint='5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967';
+  const j=await ctx.manager.create(input(b)),done=await until(ctx.manager,j.id);assert.equal(done.status,'completed',JSON.stringify(done.error));
+  assert.equal(done.pipelineMigrations.length,1);assert.notEqual(done.pipelineHash,ctx.manager.pipelineFingerprint);
+ }finally{await ctx.manager.close();await rm(ctx.dir,{recursive:true,force:true});}
+});
+test('interrupted running state restores only durable active time and automatically accumulates a new run',async()=>{
+ const b=dataset(),dir=await mkdtemp(path.join(tmpdir(),'ashare-crash-time-')),bucket=new FileBucket(path.join(dir,'warehouse'));let tick=100000,waiting=true;
+ const collect=async(_r,_p,signal,progress)=>{tick+=2000;await progress({query:['minute','month'],checkpoints:1});if(waiting)await new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Object.assign(Error('stop'),{code:'PAUSED'})),{once:true}));return b;};
+ let m=await new ResearchManager({root:path.join(dir,'research'),bucket,collector:collect,clock:()=>tick}).init();
+ try{
+  const j=await m.create({...input(b),purpose:'collect'});for(let i=0;i<100&&!m.jobs.get(j.id).progress;i++)await new Promise(r=>setTimeout(r,10));
+  tick+=3000;await m.save(m.jobs.get(j.id));const statePath=m.location(j.id,'state.json'),durable=await readFile(statePath,'utf8');assert.equal(JSON.parse(durable).timing.activeMs,5000);
+  tick+=1100;await m.close();await writeFile(statePath,durable);tick+=86400000;waiting=false;
+  m=await new ResearchManager({root:path.join(dir,'research'),bucket,collector:collect,clock:()=>tick}).init();const done=await until(m,j.id);
+  assert.equal(done.timing.activeMs,7000);assert.equal(done.timing.runs[0].stopReason,'interrupted');assert.equal(done.timing.runs[0].endedAt,new Date(105000).toISOString());assert.equal(done.timing.runs[1].activeMs,2000);assert.ok(done.timing.interruptedTailUnmeasured);assert.equal(done.recoveryCount,1);
+ }finally{await m.close();await rm(dir,{recursive:true,force:true});}
+});
 test('custom short and multi-year jobs count only the selected interval and replay immutable snapshots',async()=>{
  for(const [days,fromIndex,timeframe] of [[360,320,'5m'],[660,80,'15m']]){
   const b=fixture(days);let calls=0;const ctx=await setup(async()=>{calls++;return b;});
