@@ -3,19 +3,45 @@ Official policy: <=50,000 API requests/day, no concurrent connections.
 Our default: <=10,000/day and >=1 second/request. Other hosts behind the same
 public IP must coordinate the same budget; no local program can count them.
 """
-import datetime as dt,os,pathlib,sqlite3,time
+import datetime as dt,json,os,pathlib,sqlite3,time
 from locking import FileLock
+from public_ip import public_ip
 from zoneinfo import ZoneInfo
+def budget_path(path=None):return pathlib.Path(path or os.environ.get('BAOSTOCK_BUDGET_PATH',str(pathlib.Path.home()/'.cache/ashare-baostock/traffic.sqlite')))
+def today():return dt.datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat()
+def monitor_identity(path,resolver=None):
+    try:
+        value=(resolver or public_ip)(cache_path=path.with_name('public-ip.json'))
+        if isinstance(value,dict):return value
+    except Exception:pass
+    return {'ip':None,'source':'unknown','tcpEgressVerified':False,'note':'监控IP读取失败；本机预算保持生效'}
+def usage_snapshot(db,limit,identity,session_requests=0):
+    day=today();row=db.execute('SELECT count,blocked FROM budget WHERE day=?',(day,)).fetchone() if db else None
+    requests=row[0] if row else 0;by_ip=0;attributed=0
+    if db and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='budget_ip'").fetchone():
+        attributed=db.execute('SELECT COALESCE(SUM(count),0) FROM budget_ip WHERE day=?',(day,)).fetchone()[0]
+        if identity.get('ip'):
+            r=db.execute('SELECT count FROM budget_ip WHERE day=? AND ip=?',(day,identity['ip'])).fetchone();by_ip=r[0] if r else 0
+    return {'day':day,'requests':requests,'budget':limit,'blocked':bool(row and row[1]),'sessionRequests':session_requests,'monitorIP':dict(identity),'ipRequests':by_ip,'unattributedRequests':max(0,requests-attributed),'officialLimit':50000,'officialScope':'public-ip','countScope':'this-host-only','otherHostsCounted':False,'policy':'host-day-budget-retained-across-IP-changes'}
 class TrafficGuard:
-    def __init__(self,path=None,limit=10000,interval=1):
+    def __init__(self,path=None,limit=10000,interval=1,ip_resolver=None):
         if not 1<=limit<=40000 or interval<1:raise ValueError('保守预算最多40000，间隔至少1秒。')
-        self.path=pathlib.Path(path or os.environ.get('BAOSTOCK_BUDGET_PATH',str(pathlib.Path.home()/'.cache/ashare-baostock/traffic.sqlite')));self.path.parent.mkdir(parents=True,exist_ok=True)
+        self.path=budget_path(path);self.path.parent.mkdir(parents=True,exist_ok=True)
         try:self.lock=FileLock(str(self.path)+'.connection.lock')
         except BlockingIOError:raise RuntimeError('同一主机已有BaoStock连接；禁止并发，稍后串行运行。') from None
-        self.db=sqlite3.connect(self.path);self.db.execute('CREATE TABLE IF NOT EXISTS budget(day TEXT PRIMARY KEY,count INTEGER,last REAL,blocked INTEGER)');self.limit=limit;self.interval=interval
+        try:
+            self.db=sqlite3.connect(self.path);self.db.execute('CREATE TABLE IF NOT EXISTS budget(day TEXT PRIMARY KEY,count INTEGER,last REAL,blocked INTEGER)')
+            self.db.execute('CREATE TABLE IF NOT EXISTS budget_ip(day TEXT,ip TEXT,count INTEGER,PRIMARY KEY(day,ip))');self.db.commit()
+            self.ip_resolver=ip_resolver;self.monitor_ip=monitor_identity(self.path,ip_resolver);self.monitor_checked=time.monotonic()
+        except Exception:
+            if hasattr(self,'db'):self.db.close()
+            self.lock.close();raise
+        self.limit=limit;self.interval=interval
         self.session_requests=0;self.session_wait_ms=0
     def reserve(self):
-        day=dt.datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat()
+        if time.monotonic()-self.monitor_checked>=600:
+            self.monitor_ip=monitor_identity(self.path,self.ip_resolver);self.monitor_checked=time.monotonic()
+        day=today()
         with self.db:
             self.db.execute('INSERT OR IGNORE INTO budget VALUES(?,0,0,0)',(day,));count,last,blocked=self.db.execute('SELECT count,last,blocked FROM budget WHERE day=?',(day,)).fetchone()
             if blocked:raise RuntimeError('BaoStock已返回黑名单错误，本日采集停止；不轮换IP、不自动重连。')
@@ -24,14 +50,15 @@ class TrafficGuard:
             if wait>0:
                 started=time.perf_counter();time.sleep(wait);self.session_wait_ms+=(time.perf_counter()-started)*1000
             self.db.execute('UPDATE budget SET count=count+1,last=? WHERE day=?',(time.time(),day))
+            if self.monitor_ip.get('ip'):
+                self.db.execute('INSERT INTO budget_ip VALUES(?,?,1) ON CONFLICT(day,ip) DO UPDATE SET count=count+1',(day,self.monitor_ip['ip']))
             self.session_requests+=1
     def block(self):
-        day=dt.datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat()
-        with self.db:self.db.execute('UPDATE budget SET blocked=1 WHERE day=?',(day,))
+        day=today()
+        with self.db:
+            self.db.execute('INSERT OR IGNORE INTO budget VALUES(?,0,0,0)',(day,));self.db.execute('UPDATE budget SET blocked=1 WHERE day=?',(day,))
     def usage(self):
-        day=dt.datetime.now(ZoneInfo('Asia/Shanghai')).date().isoformat()
-        row=self.db.execute('SELECT count,blocked FROM budget WHERE day=?',(day,)).fetchone()
-        return {'day':day,'requests':row[0] if row else 0,'budget':self.limit,'blocked':bool(row and row[1]),'sessionRequests':self.session_requests}
+        return usage_snapshot(self.db,self.limit,self.monitor_ip,self.session_requests)
     def close(self):self.db.close();self.lock.close()
 
 def install(guard):
@@ -54,3 +81,16 @@ def install(guard):
     sock.send_msg=guarded
     def restore():sock.send_msg=original;socket.setdefaulttimeout(previous_timeout)
     return restore
+
+def inspect_usage(path=None,limit=None,ip_resolver=None):
+    """Read without an SDK login, reserving requests, creating a budget or locking it."""
+    path=budget_path(path);identity=monitor_identity(path,ip_resolver);db=None
+    try:
+        if path.exists():db=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)
+        return usage_snapshot(db,limit,identity)
+    finally:
+        if db:db.close()
+if __name__=='__main__':
+    import argparse
+    parser=argparse.ArgumentParser();parser.add_argument('--inspect',action='store_true');args=parser.parse_args()
+    if args.inspect:print(json.dumps(inspect_usage(),ensure_ascii=False))

@@ -2,12 +2,16 @@
 import json,pathlib,sys,tempfile,unittest
 from unittest.mock import Mock,patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'collector'))
-from minute_repair import PageCache,collect
+from minute_repair import PageCache,collect,failure_details
 from sources import SourceBatch,SourceError
 from query_cache import read_proof
 from parquet_store import archive
 
 class RepairCollectorTests(unittest.TestCase):
+    def test_provider_failures_are_actionable_without_leaking_exception_credentials(self):
+        for name,code in [('ProxyError','PROVIDER_PROXY'),('TdxFunctionCallError','PROVIDER_TCP_QUERY')]:
+            e=type(name,(Exception,),{})('mock-secret://user:password@host')
+            d=failure_details(e);self.assertEqual(d['code'],code);self.assertNotIn('password',d['message']);self.assertIn(name,d['message'])
     def frame(self,n):
         import pandas as pd
         return pd.DataFrame([{'datetime':'2024-01-02 09:35','open':10.,'high':11.,'low':9.,'close':10.,'vol':n}])

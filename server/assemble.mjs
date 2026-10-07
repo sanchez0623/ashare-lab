@@ -1,5 +1,6 @@
 import {auditBundle,isAuditAdmitted} from '../dist/quality.mjs';
 import {reconciliationReport} from '../dist/reconciliation.mjs';
+import {actionDiagnosticReport} from '../dist/action-diagnostics.mjs';
 import {verifyRepairSnapshot,rawBar,stable} from '../dist/minute-repair.mjs';
 export const canonical=value=>JSON.stringify(value,(_key,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
 const fail=(code,message,details)=>{throw Object.assign(Error(message),{code,status:409,details});};
@@ -64,9 +65,10 @@ export function assembleBundles(parents,{symbol,from,to,warmupSessions=60},{veri
   const bundle={schemaVersion:1,metadata,calendar,daily:dayRows,bars:[...bars.values()].filter(r=>between(r.date.slice(0,10),range)).sort((a,b)=>a.date.localeCompare(b.date)),actions:[...actions.values()].filter(r=>between(r.exDate,range)).sort((a,b)=>a.exDate.localeCompare(b.exDate)).map((r,i)=>({...r,id:symbol+'-'+r.exDate+'-'+i})),factors:[...factors.values()].filter(r=>between(r.dividOperateDate??r.exDate,range)).sort((a,b)=>(a.dividOperateDate??a.exDate).localeCompare(b.dividOperateDate??b.exDate)),universe:hs300?[...universe.values()].filter(r=>between(r.date,range)).sort((a,b)=>a.date.localeCompare(b.date)):[]};
   if(bundle.bars.length>120000)fail('ASSEMBLY_SIZE','合并快照超过120,000根行情，请缩小区间。');
   const report=auditBundle(bundle,{scope:hs300?'hs300':'single-security'});if(!isAuditAdmitted(report)){
-    const reconciliation=reconciliationReport(bundle,report,parents),detail=reconciliation?.summary;
+    const reconciliation=reconciliationReport(bundle,report,parents),actionDiagnostics=actionDiagnosticReport(bundle,report,parents),detail=reconciliation?.summary;
     const explanation=detail?`量价不一致 ${detail.failedChecks} 项，涉及 ${detail.affectedDays} 日：收盘价 ${detail.priceChecks} 项、成交量 ${detail.volumeChecks} 项${detail.openChecks||detail.highChecks||detail.lowChecks?`、开盘 ${detail.openChecks} 项、最高 ${detail.highChecks} 项、最低 ${detail.lowChecks} 项`:''}。${detail.sourceMismatchDays?`${detail.sourceMismatchDays} 日的差异在原快照中已存在。`:''}请下载量价核验报告查看日期和原始值，或在本地“分钟第二源核验 / 修复”中核验原始快照；暂不需要重复采集整段历史。`:'请核对对应日期资料。';
-    fail('ASSEMBLY_ADMISSION','已有数据合并后仍未通过完整性校验：'+report.blockingIssues.map(i=>i.message+'（'+i.count+'）').join('；')+'。'+explanation,{issues:report.issues,reconciliation});
+    const actionExplanation=actionDiagnostics?'真正阻断的是公司行动/因子资料，请下载公司行动核验报告，核对除权日、每股分红、送转比例与参考价；第二分钟源无法修复分红账务。量价差异只作为警告。':'';
+    fail('ASSEMBLY_ADMISSION','已有数据合并后仍未通过完整性校验：'+report.blockingIssues.map(i=>i.message+'（'+i.count+'）').join('；')+'。'+(actionDiagnostics?actionExplanation:explanation),{issues:report.issues,reconciliation,actionDiagnostics});
   }
   return {bundle,report};
 }

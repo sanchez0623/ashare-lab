@@ -67,15 +67,16 @@ export async function candidateBatch(batch,bundle){
 export async function makeRepair(bundle,baseSnapshotId,batches){
   if(!/^[a-f0-9]{64}$/.test(baseSnapshotId))reject('REPAIR_PARENT','原快照编号无效。');
   const plan=repairPlan(bundle),originals=byDay(bundle.bars),daily=new Map(bundle.daily.map(r=>[r.date,r])),choices=new Map(),attempts=[];
-  for(const batch of batches){let verified;try{verified=await candidateBatch(batch,bundle);}catch(e){attempts.push({source:batch?.source,code:e.code??'REPAIR_SOURCE',message:e.message});continue;}
+  for(const batch of batches){let verified;try{verified=await candidateBatch(batch,bundle);}catch(e){const returnedByDay=Object.fromEntries(plan.days.map(d=>[d.date,Array.isArray(batch?.rows)?batch.rows.filter(r=>r.date?.slice(0,10)===d.date).length:null]));attempts.push({source:batch?.source,code:e.code??'REPAIR_SOURCE',message:e.message,returnedByDay});continue;}
     const grouped=byDay(verified.rows),accepted=[],rejected=[];
-    for(const day of plan.days){if(choices.has(day.date))continue;const rows=grouped.get(day.date)??[],issues=verifyMinuteDay(rows,daily.get(day.date));if(issues.length)rejected.push({date:day.date,issues});else{choices.set(day.date,{...verified,rows});accepted.push(day.date);}}
+    for(const day of plan.days){if(choices.has(day.date))continue;const rows=grouped.get(day.date)??[],issues=rows.length?verifyMinuteDay(rows,daily.get(day.date)):['第二源未返回该日数据，不能据此判断原快照缺失'];if(issues.length)rejected.push({date:day.date,code:!rows.length?'NO_RESPONSE':rows.length!==48?'INCOMPLETE_GRID':'DAILY_MISMATCH',returnedBars:rows.length,issues});else{choices.set(day.date,{...verified,rows});accepted.push(day.date);}}
     const retained=batch.raw.map(r=>String(r.datetime??r.day??r.date??r['时间']??'').replace('T',' ').slice(0,16)).filter(Boolean).sort();
     attempts.push({source:verified.source,rawSHA256:verified.rawSHA256,unitMultiplier:verified.multiplier,calibrationDays:verified.calibration,accepted,rejected,actual:{from:verified.rows[0]?.date??null,to:verified.rows.at(-1)?.date??null},providerRetainedRange:{from:retained[0]??null,to:retained.at(-1)??null}});
   }
-  const unresolved=plan.days.filter(d=>!choices.has(d.date)),evidence=[];
+  const unresolved=plan.days.filter(d=>!choices.has(d.date)).map(d=>({...d,evidence:attempts.flatMap(a=>a.returnedByDay?[{source:a.source,code:a.code,returnedBars:a.returnedByDay[d.date],issues:[a.message]}]:(a.rejected??[]).filter(r=>r.date===d.date).map(r=>({source:a.source,...r})))})),evidence=[];
   for(const day of plan.days){const v=choices.get(day.date);if(v)evidence.push({date:day.date,source:v.source,unitMultiplier:v.multiplier,rawSHA256:v.rawSHA256,originalBars:(originals.get(day.date)??[]).map(rawBar),originalSHA256:await repairHash((originals.get(day.date)??[]).map(rawBar)),replacementSHA256:await repairHash(v.rows)});}
-  const report={version:repairVersion,baseSnapshotId,symbol:plan.symbol,requested:plan.requested,targetDays:plan.days.length,verifiedDays:evidence.length,unresolved,attempts,status:unresolved.length?'blocked':'passed',policy:plan.policy};
+  const noResponseDays=unresolved.filter(d=>d.evidence.every(e=>e.returnedBars===0)).length;
+  const report={version:repairVersion,baseSnapshotId,symbol:plan.symbol,requested:plan.requested,targetDays:plan.days.length,verifiedDays:evidence.length,unresolved,attempts,status:unresolved.length?'blocked':'passed',summary:{noResponseDays,returnedButUnverifiedDays:unresolved.length-noResponseDays},policy:plan.policy};
   if(unresolved.length)return {report,bundle:null};
   const repaired=structuredClone(bundle);repaired.bars=bundle.bars.flatMap(r=>{const v=choices.get(r.date.slice(0,10));if(!v)return [r];return r.date===originals.get(r.date.slice(0,10))[0].date?v.rows:[];});
   repaired.metadata.source='verified-minute-repair';repaired.metadata.primarySource=bundle.metadata.source;

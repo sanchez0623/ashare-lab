@@ -7,6 +7,13 @@ import argparse, importlib.metadata, json, pathlib, sys, os, threading, time
 from query_cache import atomic, encode, digest, read_proof
 from sources import registry, SourceError
 
+def failure_details(exc):
+    # Do not log exception bodies: HTTP exceptions can include proxy credentials.
+    name=type(exc).__name__
+    if name=='ProxyError':return {'code':'PROVIDER_PROXY','message':'HTTP代理连接失败（ProxyError）。本地请检查系统/环境代理；如确认无需代理，可设置 ASHARE_HTTP_TRUST_ENV=0 后重启服务并恢复任务。托管环境必须保留代理。'}
+    if name=='TdxFunctionCallError':return {'code':'PROVIDER_TCP_QUERY','message':'通达信连接或分钟查询失败（TdxFunctionCallError）。请检查本机到通达信服务器的TCP连接及mootdx依赖；恢复只重试失败来源，成功响应保留。'}
+    return {'code':getattr(exc,'code','REPAIR_PROVIDER_FAILED'),'message':str(exc) if isinstance(exc,SourceError) else '第二源请求失败：'+name}
+
 def emit(message,**extra):
     print(json.dumps({'message':message,**extra},ensure_ascii=False),flush=True)
 
@@ -63,7 +70,7 @@ def main():
                 time.sleep(1)
         threading.Thread(target=watch_parent,daemon=True).start()
     try:collect(json.loads(pathlib.Path(args.request).read_bytes()),args.root,args.output)
-    except SourceError as e:emit(str(e),code=e.code);return 2
-    except Exception as e:emit('第二源请求失败：'+type(e).__name__,code='REPAIR_PROVIDER_FAILED');return 2
+    except Exception as e:
+        details=failure_details(e);emit(details.pop('message'),**details);return 2
     return 0
 if __name__=='__main__':raise SystemExit(main())

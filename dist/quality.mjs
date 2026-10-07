@@ -1,7 +1,7 @@
 import {slots,dayOf,detectTimeframe} from './data.mjs';
 import {boardNames} from './rules.mjs';
 const validDate=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s;
-export const auditVersion='3.3';
+export const auditVersion='3.4';
 const warningCodes=new Set(['DAILY_CROSSCHECK','DAILY_OHLC_CROSSCHECK']);
 export const isAuditAdmitted=report=>['passed','warning'].includes(report?.status);
 export function auditDisposition(issues){
@@ -69,13 +69,19 @@ export function auditBundle(b,{scope='hs300'}={}){
   if(universeGaps.length)add('UNIVERSE_HISTORY','成分股快照缺失、非300只或含未来更新',universeGaps.length,universeGaps);
   if(um.size!==universe.length)add('UNIVERSE_DUPLICATES','成分股查询日期重复');
   }
-  const actionIds=new Set();
+  const actionIds=new Set(),actionChecks=[];
   for(const a of actions){
     if(actionIds.has(a.id)||!a.id){add('ACTION_ID','公司行动缺少唯一编号');continue;}actionIds.add(a.id);
     if(a.type==='rights'||a.rightsPerShare>0){add('RIGHTS','配股需要认购、资金与股份上市明细；本版阻止该区间正式回测，避免默认外部注资',1,[a.exDate]);continue;}
     if(!validDate(a.recordDate)||!validDate(a.exDate)||a.recordDate>=a.exDate||!a.announcementTime||a.announcementTime>a.recordDate+' 15:00'||!Number.isFinite(a.referencePrice)||a.referencePrice<=0||!Number.isFinite(a.cashPerShare??0)||(a.cashPerShare??0)<0||!Number.isFinite(a.bonusPerShare??0)||(a.bonusPerShare??0)<0||(a.cashPerShare>0&&(!validDate(a.payDate)||a.payDate<a.exDate))||(a.bonusPerShare>0&&(!validDate(a.shareListDate)||a.shareListDate<a.exDate)))add('ACTION_FIELDS','分红送转事件缺少公告、登记、除权、到账/上市日期或除权参考价',1,[a.id]);
     if(a.cashPerShare>0&&!['gross','net'].includes(a.cashBasis))add('DIVIDEND_TAX','缺少股息税前/税后口径',1,[a.id]);
-    const d=dm.get(a.exDate);const record=dm.get(a.recordDate),theoretical=record?(record.close-(a.cashPerShare??0))/(1+(a.bonusPerShare??0)):null;if(record&&Math.abs(theoretical-a.referencePrice)>.011)add('ACTION_ECONOMICS','除权参考价与现金/送转比例不符，可能漏报配股或其他行动',1,[a.id]);
+    // Exchange ex-reference uses the last trading close before the ex-date.
+    // Record date determines entitlements, and is not a substitute for it.
+    const d=dm.get(a.exDate),record=dm.get(a.recordDate),previous=daily.filter(r=>r.date<a.exDate&&r.halted===0).sort((x,y)=>x.date.localeCompare(y.date)).at(-1);
+    const theoretical=previous?(previous.close-(a.cashPerShare??0))/(1+(a.bonusPerShare??0)):null;
+    const delta=theoretical!==null&&Number.isFinite(a.referencePrice)?a.referencePrice-theoretical:null;
+    actionChecks.push({id:a.id,recordDate:a.recordDate,exDate:a.exDate,payDate:a.payDate??null,shareListDate:a.shareListDate??null,cashPerShare:a.cashPerShare??0,bonusPerShare:a.bonusPerShare??0,cashBasis:a.cashBasis??null,recordClose:record?.close??null,previousTradingDate:previous?.date??null,previousTradingClose:previous?.close??null,theoreticalReference:theoretical,reportedReference:a.referencePrice??null,dailyReference:d?.prev_close??null,difference:delta,tolerance:.011,economicsStatus:delta===null?'unavailable':Math.abs(delta)>.011?'failed':'passed',formula:'(previous trading close - cash per share) / (1 + bonus per share)'});
+    if(delta!==null&&Math.abs(delta)>.011)add('ACTION_ECONOMICS','除权参考价与现金/送转比例不符，可能漏报配股或其他行动',1,[a.exDate+' · '+a.id]);
     if(d&&Math.abs(d.prev_close-a.referencePrice)>.011)add('EX_REFERENCE','公司行动与日线除权参考价冲突',1,[a.id]);
   }
   // Causal chain: a factor can change only on an accounted ex-date. Future factors
@@ -91,7 +97,7 @@ export function auditBundle(b,{scope='hs300'}={}){
     }if(d.halted!==1)prev=d;
   }
   const disposition=auditDisposition(issues);
-  return {version:auditVersion,scope,membershipChecked:scope==='hs300',...disposition,label:disposition.status==='blocked'?(scope==='single-security'?'不可单标的回测':'不可正式回测'):disposition.status==='warning'?'可回测 · 存在量价警告（未修复）':m.synthetic?'合成数据包 · 结构校验通过':scope==='single-security'?'单标的数据校验通过 · 未核验沪深300成员':'结构与覆盖校验通过',issues,requested:range,actual:{from:bars[0]?.date??null,to:bars.at(-1)?.date??null,bars:bars.length},sessions:sessions.length,completeSessions,suspendedSessions,warning:'量价不一致只警告，不修改原始K线；成交量差异可能影响量能信号，高低价差异可能影响突破、ATR及做T，收盘价差异可能影响均线和估值。结果不代表数据已修复或差异无影响。校验不能证明历史可得性或股票池无幸存者偏差。'+(scope==='single-security'?' 当前仅研究指定证券，不要求也不证明历史沪深300成员资格。':'')};
+  return {version:auditVersion,scope,membershipChecked:scope==='hs300',...disposition,label:disposition.status==='blocked'?(scope==='single-security'?'不可单标的回测':'不可正式回测'):disposition.status==='warning'?'可回测 · 存在量价警告（未修复）':m.synthetic?'合成数据包 · 结构校验通过':scope==='single-security'?'单标的数据校验通过 · 未核验沪深300成员':'结构与覆盖校验通过',issues,actionChecks,requested:range,actual:{from:bars[0]?.date??null,to:bars.at(-1)?.date??null,bars:bars.length},sessions:sessions.length,completeSessions,suspendedSessions,warning:'量价不一致只警告，不修改原始K线；成交量差异可能影响量能信号，高低价差异可能影响突破、ATR及做T，收盘价差异可能影响均线和估值。结果不代表数据已修复或差异无影响。校验不能证明历史可得性或股票池无幸存者偏差。'+(scope==='single-security'?' 当前仅研究指定证券，不要求也不证明历史沪深300成员资格。':'')};
 }
 export function prepareBundle(b,{strict=true,scope='hs300'}={}){
   const report=auditBundle(b,{scope});if(strict&&!isAuditAdmitted(report))throw Error('数据准入失败：'+report.blockingIssues.slice(0,4).map(x=>x.message+'（'+x.count+'）').join('；'));

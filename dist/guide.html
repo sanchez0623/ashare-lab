@@ -1,4 +1,4 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="青衡A股单标的回测系统详细操作说明，覆盖采集、回测、自动微调、方案比较与报告。"><meta name="handbook-source-sha256" content="aaa8e0000551da0b81cb9e8232c959ded6c1d756203c10e032b268a61db82a22"><title>青衡 · 详细操作说明书</title><style>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="青衡A股单标的回测系统详细操作说明，覆盖采集、回测、自动微调、方案比较与报告。"><meta name="handbook-source-sha256" content="444042fda77c75a7b829a59ae7ec6fe24eecd4cf1c57d6647a0e5ac4450208b3"><title>青衡 · 详细操作说明书</title><style>
 :root{color-scheme:light;font-family:"Noto Sans CJK SC","Microsoft YaHei","PingFang SC",sans-serif;color:#24364b;background:#f4f6f9;font-size:15px;line-height:1.85}
 *{box-sizing:border-box}body{margin:0}a{color:#08786e;text-decoration:none}a:hover{text-decoration:underline}a:focus-visible,button:focus-visible{outline:2px solid #08786e;outline-offset:4px}
 .toolbar{display:flex;justify-content:space-between;gap:20px;padding:18px 32px;background:#14253b;color:white;align-items:center}.toolbar a{color:#b8eee3}.toolbar strong{letter-spacing:.1em}.actions{display:flex;flex-wrap:wrap;gap:18px;align-items:center}.actions button{font:inherit;background:none;border:0;color:#b8eee3;cursor:pointer;padding:0}
@@ -12,7 +12,7 @@ code{font-family:"Noto Sans Mono CJK SC",Consolas,monospace;font-size:.88em;back
 </style></head><body>
 <header class="toolbar"><strong>青衡 · 操作说明书</strong><nav class="actions" aria-label="说明书操作"><a href="./index.html">返回系统</a><a href="./guide.pdf" download="青衡详细操作说明书.pdf">下载PDF</a><a href="./USER_GUIDE.md" download="青衡详细操作说明书.md">下载Markdown</a><button type="button" id="print-guide">打印 / 另存为PDF</button></nav></header>
 <div class="page"><nav class="toc" aria-label="章节目录"><h2>章节目录</h2><ol><li><a href="#chapter-01">01 · 从哪里开始</a></li><li><a href="#chapter-02">02 · 安装、启动、停止与更新</a></li><li><a href="#chapter-03">03 · 五个页面与两种运行环境</a></li><li><a href="#chapter-04">04 · 第一次真实数据采集</a></li><li><a href="#chapter-05">05 · 查看任务、处理失败与断点恢复</a></li><li><a href="#chapter-06">06 · 手动回测：从选数据到看结果</a></li><li><a href="#chapter-07">07 · 资金、费用与参数单位</a></li><li><a href="#chapter-08">08 · 大波段信号与离场参数</a></li><li><a href="#chapter-09">09 · 底仓、趋势加仓与做T</a></li><li><a href="#chapter-10">10 · 自动微调：点击什么、如何读比较</a></li><li><a href="#chapter-11">11 · 比较五种仓位方案</a></li><li><a href="#chapter-12">12 · 判断策略好不好，以及如何小范围修改</a></li><li><a href="#chapter-13">13 · 结果指标、成交、时序和文件</a></li><li><a href="#chapter-14">14 · 导入已有数据与持久仓库</a></li><li><a href="#chapter-15">15 · 数据源、密钥与同步</a></li><li><a href="#chapter-16">16 · 防未来信息、交易规则与公司行动</a></li><li><a href="#chapter-17">17 · 保存、备份与换电脑</a></li><li><a href="#chapter-18">18 · 常见问题与排查顺序</a></li><li><a href="#chapter-19">19 · 一次可复查研究的操作清单</a></li></ol></nav><article><h1>青衡 A股单标的量化回测系统 · 详细操作说明书</h1>
-<p><strong>手册版本：1.10。适用于五种策略自动微调、多模型自然语言调参、T配对/波段盈亏分列、量价警告准入、页码跳转、跨年度合并回测和批量增量采集的当前部署包。</strong></p>
+<p><strong>手册版本：1.11。适用于监控IP与用量、第二源覆盖诊断、公司行动核验报告、五种策略自动微调、多模型自然语言调参、量价警告准入、跨年度合并回测和批量增量采集的当前部署包。</strong></p>
 <p>本系统用于单标的大波段研究，支持指定证券回测与历史沪深300成分股研究，包含行情采集、数据校验、回测、自动微调参数、仓位方案比较和报告导出。系统不连接交易账户，不发送真实委托。</p>
 <p>所有行情日期、交易时点和日请求预算按北京时间理解。文中的证券代码、日期和参数是操作示例，不表示行情已下载，也不表示该股票或策略已经验证盈利。</p><section class="print-toc"><h2>章节目录</h2><ol><li><a href="#chapter-01">01 · 从哪里开始</a></li><li><a href="#chapter-02">02 · 安装、启动、停止与更新</a></li><li><a href="#chapter-03">03 · 五个页面与两种运行环境</a></li><li><a href="#chapter-04">04 · 第一次真实数据采集</a></li><li><a href="#chapter-05">05 · 查看任务、处理失败与断点恢复</a></li><li><a href="#chapter-06">06 · 手动回测：从选数据到看结果</a></li><li><a href="#chapter-07">07 · 资金、费用与参数单位</a></li><li><a href="#chapter-08">08 · 大波段信号与离场参数</a></li><li><a href="#chapter-09">09 · 底仓、趋势加仓与做T</a></li><li><a href="#chapter-10">10 · 自动微调：点击什么、如何读比较</a></li><li><a href="#chapter-11">11 · 比较五种仓位方案</a></li><li><a href="#chapter-12">12 · 判断策略好不好，以及如何小范围修改</a></li><li><a href="#chapter-13">13 · 结果指标、成交、时序和文件</a></li><li><a href="#chapter-14">14 · 导入已有数据与持久仓库</a></li><li><a href="#chapter-15">15 · 数据源、密钥与同步</a></li><li><a href="#chapter-16">16 · 防未来信息、交易规则与公司行动</a></li><li><a href="#chapter-17">17 · 保存、备份与换电脑</a></li><li><a href="#chapter-18">18 · 常见问题与排查顺序</a></li><li><a href="#chapter-19">19 · 一次可复查研究的操作清单</a></li></ol></section><h2 id="chapter-01">01 · 从哪里开始</h2>
 <p>如果你已经用 <code>start-local.cmd</code> 启动成功，直接阅读第04章“第一次真实数据采集”；如果只是想熟悉页面，可以先用默认合成演示完成第06章的回测，再到第10章体验自动微调。</p>
@@ -130,6 +130,13 @@ collector/.venv/bin/python -m pip install -r collector/requirements.txt</code></
 <p>本版SDK每页2000行。一年约12000根5分钟K线不等于12000次调用：按月通常一页即可完成，全年约12次分钟查询，另有预热、日线、日历、分红、因子、登录和登出。实际次数受缺口、分页和供应商响应影响，以日志为准。卡片的“BaoStock日累计”来自跨进程共享预算，含登录、分页与登出，是该任务最后记录时的用量；同一公网IP其他机器的用量不在本机计数内。</p>
 <p>达到预算或黑名单阻断后保留断点，按提示处理，必要时等下一日再恢复。不要同时启动多份BaoStock客户端；同一公网IP的其他机器也要协调调用。</p>
 <p>GUI没有日预算编辑框。高级任务API的预算可设置为1至40000，但更高预算不是解除供应商限制的方法。</p>
+<p>官方50000次额度按公网IP统计。本机计数在用户目录持久保存，含本机共享该预算文件的进程；它无法自动知道同一出口下其他电脑或其他项目的请求数。多台机器必须统一协调额度与连接，本版没有跨机器中央计数服务。</p>
+<p>在“行情数据”的“BaoStock · 监控 IP 与用量”中点击“读取本机 IP 与用量”。此操作只读预算文件，不登录BaoStock、不消耗BaoStock请求；只会在IP缓存过期时访问公网IP echo服务。结果短缓存10秒，IP证据跨进程缓存10分钟。任务开始和请求日志也记录监控IP、来源及该IP的本机用量。</p>
+<p>识别顺序为 <code>BS_MONITOR_IP</code> 人工声明 → api.ipify.org → ifconfig.me/ip → ip.3322.net → 4.ipw.cn → myip.ipip.net；每个HTTP请求最长3秒。HTTP查询继承环境代理和CA，所以查到的候选IP可能与BaoStock实际TCP出口不同，界面会注明“HTTP echo 候选”和代理情况。人工声明也不表示程序已独立验证TCP出口。全部失败时，网卡/主机地址仅用于诊断，不作为公网额度身份。</p>
+<p>如果已自行确认实际公网IPv4，可以在启动服务前声明，示例地址须换成自己的公网IP：</p>
+<pre><code data-language="powershell">$env:BS_MONITOR_IP=&quot;你的公网IPv4&quot;
+.\start-local.cmd</code></pre>
+<p>更换IP、识别失败或缓存到期都不清零本机日预算，也不能解除当日黑名单。旧版请求没有IP证据的，显示为“旧版/未知IP请求未归属”，仍计入当日总量。不要删除预算数据库或轮换IP绕过规则。</p>
 <h3 id="section-23">5.4.1 耗时与完整日志</h3>
 <p>卡片显示“累计运行”“本次运行”和“某阶段累计”耗时，暂停和恢复各自记录一次运行段。“本次运行”从最近一次启动或恢复计起；“某阶段累计”包括历次运行在该阶段花费的时间，因此恢复后它可能大于本次运行时间。累计运行包括网络查询、SDK分页、限流等待、校验和计算；不包括排队、暂停或停机。正常暂停、停止或失败时先结算耗时并落盘，断点恢复后继续累计。浏览器关闭不停止本地任务，也不停止计时。</p>
 <p>服务每5秒保存计时，异常退出只能恢复最后已落盘的心跳。最后尚未落盘的短片段无法精确补测，界面和日志会注明；停机时间始终不补算。升级前没有计时的历史运行也不编造时长。</p>
@@ -310,7 +317,7 @@ node scripts/local-server.mjs</code></pre>
 <p>高级使用可配置Windows任务计划或Linux提供的service/timer，用手工增量采集器补历史，然后上传入库。需使用真实绝对路径、避免并行实例、在北京时间盘后执行，并检查最新日期与缺口。完整命令见 <code>LOCAL_DEPLOY.md</code> 和 <code>collector/README.md</code>。</p>
 <p>已有研究快照不因定时更新被原地改写。使用更新后的数据应创建新的快照或任务，保留旧研究证据。</p>
 <h3 id="section-53">15.5 分钟第二源核验 / 修复</h3>
-<p>校验版本3.3将有效分钟线与独立日线的开高低收、成交量差异改为警告：状态为 <code>warning</code>、显示“可回测 · 存在量价警告（未修复）”。允许继续合并、单标的或已有成员证据的沪深300回测、参数研究，不再要求先修复这些差异。不会改写原始K线，不用全天日线总量缩放早盘。网页结果和JSON/优化/后台报告保留警告、数量、日期样例及准入政策；量价核验报告仍可下载。</p>
+<p>当前校验版本3.4保留有效分钟线与独立日线的开高低收、成交量差异警告政策：状态为 <code>warning</code>、显示“可回测 · 存在量价警告（未修复）”。允许继续合并、单标的或已有成员证据的沪深300回测、参数研究，不再要求先修复这些差异。不会改写原始K线，不用全天日线总量缩放早盘。网页结果和JSON/优化/后台报告保留警告、数量、日期样例及准入政策；量价核验报告仍可下载。</p>
 <p>当前内置策略不以成交量大小筛选入场，单纯量能差异对当前信号可能较小，但不等于所有差异无影响：大波段策略用分钟聚合的日线高低价计算突破与ATR，做T与止损也会使用历史价格；收盘价会影响均线和估值。缺少可信替代数据时不能量化误差，更不能认定收益准确或每笔盈利。时序校验通过不代表数据准确。</p>
 <p>缺失整日/分钟、重复或无效K线、无效独立日线、未知ST/停牌、未裁决重叠修订、公司行动/因子/预热或成员证明缺失仍是阻断问题。报告同时有警告和阻断时仍不允许回测。旧仓库清单显示“旧版校验”，载入后按当前规则重新检查；原始数据和旧报告不覆盖，旧正式报告仍受原引擎版本约束。</p>
 <p>如希望消除量价警告，可继续执行第二源核验。不要反复重拉整年，也不要提高容差使问题消失；“允许带警告回测”不是“数据已修复”。</p>
@@ -318,6 +325,11 @@ node scripts/local-server.mjs</code></pre>
 <pre><code data-language="powershell">collector\.venv\Scripts\python.exe -m pip install &quot;mootdx&gt;=0.11,&lt;1&quot;</code></pre>
 <p>“已配置”、安装成功、TCP连接成功都不等于供应商保留2024年或整年分钟历史。免费源不覆盖所需日期时，任务会受阻，报告列出未通过日期和每个来源的拒绝原因。此时需要实际提供该区间的历史分钟数据源，不能凭日线重建；现有理杏仁适配器仅提供日线。</p>
 <p>修复任务受阻不会单凭量价差异阻止原快照回测；只有全部异常日独立对账通过，才会显示“已修复”。</p>
+<p>第二源核验区分“该日未返回数据”和“返回后未通过核验”，任务卡片直接显示各来源实际覆盖和最近连接失败。缺少第二源响应不等于原快照缺失K线。新浪只能返回供应商保留的近期数据，无法靠提高请求深度补出任意年份；东财分钟接口也不能保证一年历史。通达信TCP失败或东财 <code>ProxyError</code> 应先处理网络，恢复时只重试失败来源，已有完整成功响应保留。本次经审查的前版核验任务可恢复并继续检查原始哈希；未知版本仍须新建。</p>
+<p>本机确认不需要系统或环境代理时，可关闭环境代理后重启服务；现在该设置同时作用于AkShare自建请求和本系统HTTP会话。它不是自动重试方案，托管环境仍继承必需代理及CA。</p>
+<pre><code data-language="powershell">$env:ASHARE_HTTP_TRUST_ENV=&quot;0&quot;
+.\start-local.cmd</code></pre>
+<p>如回测提示 <code>ACTION_ECONOMICS</code> 或“除权参考价与现金/送转比例不符”，阻断原因是公司行动账务，不是量价警告。在回测错误下方或载入快照后的“当前数据校验”中点击“下载公司行动核验报告”。报告列出除权日、登记日、前一交易日收盘、每股现金、每股送转、理论/事件/日线参考价及差额；合并报错时还保留各父快照对应事件和逐日值。参考价公式为（除权前最后交易日收盘−每股现金）÷（1+每股送转），股权登记日用于权益登记，不替代前一交易日。实际分红资料不足、配股或其他行动未支持时仍阻断，不能根据价格倒推现金/送股，第二分钟源也不能修复这些账务。将公司行动报告和涉及的原快照一并保留用于核验，不需要反复重拉整年分钟线。</p>
 <p>原始快照永不覆盖。替换整日K线必须可由保存的第二源原始响应无损推导，禁止手工改收盘价、按当天总成交量缩放早盘或向前填补分钟。通达信只允许在至少5个独立完整交易日唯一核验出的股/手固定单位转换，不允许任意比例拟合。</p>
 <p>任务、响应、分页检查点和新Parquet归档位于 <code>.local-data/research/minute-repairs</code>；累计耗时每5秒保存，暂停和停机不计时。重新打开网页后可恢复任务。通达信分页相对于最新行情；锚点变化时使用新的检查点命名空间，保留旧证据，不混接错位分页。</p>
 <p>修复快照可与其他年度原始快照合并；重叠旧K线必须与修复证据中保留的原始值逐根一致，未知修订仍阻止合并。新版本增加开高低价核验，因此异常日期可能多于旧报告；旧正式研究报告仍绑定原引擎版本，不会按新版规则假装复现。</p>

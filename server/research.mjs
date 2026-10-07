@@ -20,7 +20,7 @@ const failure=(code,message,details)=>Object.assign(Error(message),{code,details
 // Research jobs remain pinned to their strategy engine; collection-only jobs
 // never execute that engine. All collection responses are still revalidated.
 // Unknown pipelines still cannot reuse old work.
-const compatiblePipelines=new Set(['d7b13b8d804033f7b269d961e14b6e81d993fb45d45c03a6e5610e5b751f1f82','cbfe084871bf787bdd04c3a66462968ba036ab9372758022b316883befd22230','5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c','4b3ee26892f85078e72336fa3c010116d812272e8f16b5a4189fa6702062cb13']);
+const compatiblePipelines=new Set(['f16cb4ed61cff168dd1b1b79befa5b9b03d1a555c4c2470dae9792eb760deae9','d7b13b8d804033f7b269d961e14b6e81d993fb45d45c03a6e5610e5b751f1f82','cbfe084871bf787bdd04c3a66462968ba036ab9372758022b316883befd22230','5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c','4b3ee26892f85078e72336fa3c010116d812272e8f16b5a4189fa6702062cb13']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:canonical(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 export function yearStart(to){const d=new Date(to+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);d.setUTCFullYear(d.getUTCFullYear()-1);return d.toISOString().slice(0,10);}
 export function normalizeRequest(input){
@@ -84,7 +84,7 @@ export function auditAccounting(result,bundle){
   return {status:'passed',valuationPoints:checked,fees,checks:['order and corporate cash/share movements','cash + tradable/locked stock value + dividend receivable','order fee sum','final equity','signal availability','sellable quantity']};
 }
 async function engineHash(){const files=['engine.mjs','quality.mjs','data.mjs','rules.mjs','corporate.mjs','fees.mjs','inventory.mjs'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,'dist',f)))]);parts.push(['runner',hash(await readFile(path.join(project,'server/research-runner.mjs')))]);return hash(canonical(parts));}
-async function pipelineHash(){const files=['server/research.mjs','server/research-timing.mjs','collector/research_collect.py','collector/query_cache.py','dist/research-input.mjs','collector/sources.py','collector/sync.py','collector/locking.py','collector/baostock_guard.py','collector/parquet_store.py'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,f)))]);return hash(canonical(parts));}
+async function pipelineHash(){const files=['server/research.mjs','server/research-timing.mjs','collector/research_collect.py','collector/query_cache.py','dist/research-input.mjs','collector/sources.py','collector/sync.py','collector/locking.py','collector/baostock_guard.py','collector/public_ip.py','collector/parquet_store.py'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,f)))]);return hash(canonical(parts));}
 const jsonResponse=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 // Node decodes collector output as UTF-8; Windows pipe encodings must match.
 const pythonEnv=()=>({...process.env,PYTHONIOENCODING:'utf-8'});
@@ -236,6 +236,17 @@ export class ResearchManager {
       this.sourceCache={at:Date.now(),value};return value;
     })();try{return await this.sourceProbe;}finally{this.sourceProbe=null;}
   }
+  async trafficStatus(){
+    if(this.trafficCache&&Date.now()-this.trafficCache.at<10000)return this.trafficCache.value;
+    if(this.trafficProbe)return this.trafficProbe;
+    this.trafficProbe=(async()=>{
+      const executable=await this.python();
+      try{
+        const stdout=await new Promise((resolve,reject)=>execFile(executable,[path.join(project,'collector/baostock_guard.py'),'--inspect'],{cwd:project,env:pythonEnv(),windowsHide:true,timeout:22000,maxBuffer:64*1024,encoding:'utf8'},(error,stdout)=>error?reject(error):resolve(stdout)));
+        const value={backend:'local',...JSON.parse(stdout)};this.trafficCache={at:Date.now(),value};return value;
+      }catch(e){throw Object.assign(Error(e.code==='ENOENT'?'未找到Python；请安装或设置ASHARE_PYTHON。':'无法读取本机IP与用量；未重置预算，请检查Python与预算文件权限。'),{status:503,code:'TRAFFIC_STATUS_FAILED'});}
+    })();try{return await this.trafficProbe;}finally{this.trafficProbe=null;}
+  }
   async collectPython(job,collection){
     const executable=await this.python();await rm(path.join(collection,'error.json'),{force:true});
     const child=spawn(executable,[path.join(project,'collector/research_collect.py'),'--request',this.location(job.id,'request.json'),'--root',collection,'--store',path.join(this.root,'market'),'--parent',String(process.pid)],{cwd:project,env:pythonEnv(),windowsHide:true,stdio:['ignore','pipe','pipe']});this.child=child;
@@ -264,6 +275,7 @@ export class ResearchManager {
     try{const url=new URL(request.url),pathname=url.pathname,base='/api/research/jobs';
       if(pathname==='/api/research/sources'&&request.method==='GET')return jsonResponse(await this.sourceStatus());
       if(request.method==='POST'){const origin=request.headers.get('origin');if(origin&&origin!==url.origin)return jsonResponse({error:'只接受本站任务写入'},403);if(!request.headers.get('content-type')?.startsWith('application/json'))return jsonResponse({error:'需要JSON请求'},415);}
+      if(pathname==='/api/research/traffic'&&request.method==='POST')return jsonResponse(await this.trafficStatus());
       if(pathname===base&&request.method==='GET')return jsonResponse({jobs:[...this.jobs.values()].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(j=>this.view(j)),batches:[...this.batches.values()].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(b=>this.batchView(b)),backend:'local',serial:true});
       if(pathname===base&&request.method==='POST')return jsonResponse(await this.create(await request.json()),202);
       if(pathname==='/api/research/batches'&&request.method==='POST')return jsonResponse(await this.createBatch(await request.json()),202);
@@ -277,6 +289,6 @@ export class ResearchManager {
       }
       if(['pause','resume','repeat'].includes(match[2])&&request.method==='POST')return jsonResponse(await this[match[2]](job.id),202);
       return jsonResponse({error:'任务方法不存在'},405);
-    }catch(e){return jsonResponse({error:e.message,code:e.code??'TASK_ERROR'},e.code==='NOT_FOUND'?404:e.code==='REQUEST'||e.message.includes('参数')?400:409);}
+    }catch(e){return jsonResponse({error:e.message,code:e.code??'TASK_ERROR'},e.status??(e.code==='NOT_FOUND'?404:e.code==='REQUEST'||e.message.includes('参数')?400:409));}
   }
 }

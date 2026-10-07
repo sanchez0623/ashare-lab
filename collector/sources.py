@@ -52,9 +52,17 @@ def frame_records(frame):return json.loads(frame.to_json(orient='records',date_f
 def bounded_requests():
     import requests
     original=requests.sessions.Session.request
+    managed=pathlib.Path('/etc/codex/network-policy.json').exists()
+    direct=not managed and os.environ.get('ASHARE_HTTP_TRUST_ENV','1')=='0'
     def bounded(self,*args,**kwargs):
         if not kwargs.get('timeout'):kwargs['timeout']=30
-        return original(self,*args,**kwargs)
+        # AkShare creates its own sessions. Honor the same explicit local
+        # override as our HTTP adapters; never disable a managed proxy.
+        previous=self.trust_env
+        try:
+            if direct:self.trust_env=False
+            return original(self,*args,**kwargs)
+        finally:self.trust_env=previous
     requests.sessions.Session.request=bounded
     try:yield
     finally:requests.sessions.Session.request=original

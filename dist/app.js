@@ -2,8 +2,10 @@ import {parseCollectionCodes} from './collection-batch.mjs';
 import {setupOptimization} from './optimization-ui.mjs';
 import {candidateLabel} from './parameter-schema.mjs';
 import {setupLLM} from './llm-ui.mjs';
+import {trafficUsageHTML} from './traffic-ui.mjs';
 import {defaults,demoData,demoMinuteData,parseCSV,backtest,compareParameters,compareManagement,managementNames,orderFees,detectTimeframe,resampleData,dailyGroups,periodLabel} from './engine.mjs';
 import {auditBundle,auditVersion} from './quality.mjs';
+import {actionDiagnosticReport} from './action-diagnostics.mjs';
 import {requiredWarmupSessions} from './research-input.mjs';
 import {reconciliationReport} from './reconciliation.mjs';
 import {setupMinuteRepair} from './minute-repair-ui.mjs';
@@ -97,8 +99,18 @@ $('#data-mode').onchange=()=>{if(activeBundle){qualityReport=selectedAudit(activ
 $('#optimize').onclick=async()=>{const btn=$('#optimize'),c=config(),runData=activeBundle??data,runName=dataName;btn.disabled=true;btn.textContent='正在训练 / 验证…';try{if(source==='import'&&!activeBundle&&c.dataMode!=='exploration')throw Error('正式参数研究需要含历史成分、ST与公司行动的完整数据包。');const comparison=await compute('compare',runData,c);const {rows}=comparison;const label=r=>candidateLabel(r.config);$('#optimizer-results').innerHTML=`<div class="validation-split">${esc(runName)} · ${periodLabel(c.timeframe)}<br>训练目标：${c.objective==='quality'?'胜率保守估计 + 收益 / 回撤':'仅收益对照'} · 达到准入 ${comparison.qualified} 组<br>训练 ${comparison.trainFrom} — ${comparison.trainTo}<br>验证 ${comparison.validationFrom} — ${comparison.validationTo} · 验证段从空仓重启，仅用历史预热</div><div class="table-wrap"><table><thead><tr><th>${names[c.strategy]+'参数'}</th><th>训练收益 / 成交数</th><th>训练胜率下界</th><th>验证收益 / 胜率</th><th>验证回撤</th><th>操作</th></tr></thead><tbody>${rows.map((r,i)=>r.error?`<tr><td>${label(r)}</td><td colspan="5">${esc(r.error)}</td></tr>`:`<tr class="${i===0&&r.quality?.eligible?'picked':''}"><td>${label(r)}${i===0&&r.quality?.eligible?' · 训练优选':' · '+r.quality.reason}</td><td class="${cls(r.training.total)}">${pct(r.training.total,true)} / ${r.training.closedTrades} 笔</td><td>${pct(r.training.wilsonLower)}</td><td class="${cls(r.validation?.total)}">${pct(r.validation.total,true)} / ${pct(r.validation?.winrate)}</td><td class="negative">${pct(r.validation?.maxdd)}</td><td>${r.validation?`<button class="load-params" data-opt="${i}">回测验证段</button>`:esc(r.validationError||"验证未完成")}</td></tr>`).join('')}</tbody></table></div><p class="stats-note" style="padding-top:16px">评分和准入只用训练段，未用验证结果选参。胜率下界为95% Wilson统计下界，假设样本独立；交易相关性会削弱该估计。不能保证每笔盈利；样本不足或标准未达时不推荐。验证不是未来保证；反复据此调参后需换新的验证区间。</p>`;$$('[data-opt]').forEach(b=>b.onclick=()=>{setConfig({...rows[Number(b.dataset.opt)].config,from:comparison.validationFrom,to:comparison.validationTo});toast('已载入参数与独立验证区间，点击运行回测。');});}catch(e){toast(e.message);}finally{btn.disabled=false;btn.textContent='运行 9 组训练 / 验证';}};
 $('#clear-history').onclick=()=>{history=[];try{localStorage.removeItem('qingheng-history');}catch{}renderHistory();toast('本机回测记录已清空。');};
 async function api(path,options={}){const r=await fetch(path,options);let v;try{if(path.startsWith('/api/data/bundle?id=')){const bytes=await r.arrayBuffer(),expected=new URL(path,location.origin).searchParams.get('id'),digest=await crypto.subtle.digest('SHA-256',bytes),actual=[...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');if(r.ok&&actual!==expected)throw Error('快照 SHA-256 不一致，已拒绝载入。');v=JSON.parse(new TextDecoder().decode(bytes));}else v=await r.json();}catch(e){if(e.message.includes('SHA-256'))throw e;throw Error('行情仓库接口暂不可用，请保留本地文件后重试。');}if(!r.ok)throw Object.assign(Error(v.error||'仓库请求失败'),{code:v.code,details:v.details});return v;}
-function clearReconciliation(){reconciliation=null;const el=$('#backtest-reconciliation');if(el){el.hidden=true;el.replaceChildren();}}
+function clearReconciliation(){reconciliation=null;for(const id of ['#backtest-reconciliation','#backtest-actions']){const el=$(id);if(el){el.hidden=true;el.replaceChildren();}}}
+function actionDiagnosticHTML(report){
+ if(!report)return '';
+ return `<p class="quality-blocked"><strong>公司行动资料阻断回测；量价差异仅警告。</strong></p><p class="help">核对下列除权数值。不能靠第二分钟源、放宽量价容差或推算分红来修复。</p>${report.checks.map(c=>`<p class="help">除权 ${esc(c.exDate)} · 登记 ${esc(c.recordDate)}<br>前一交易日 ${esc(c.previousTradingDate??'缺失')} 收盘 ${num(c.previousTradingClose,4)} · 每股现金 ${num(c.cashPerShare,6)} · 每股送转 ${num(c.bonusPerShare,6)}<br>理论参考价 ${num(c.theoreticalReference,6)} · 事件参考价 ${num(c.reportedReference,6)} · 日线参考价 ${num(c.dailyReference,6)} · 差 ${num(c.difference,6)}<br>公式：（前一交易日收盘 − 每股现金）÷（1 + 每股送转）；绝对容差 0.011 元。${c.economicsStatus==='failed'?'此事件经济关系未通过。':''}</p>`).join('')}`;
+}
+function showActionDiagnostics(report){
+ if(!report)return;
+ let el=$('#backtest-actions');if(!el){el=document.createElement('div');el.id='backtest-actions';el.className='reconciliation';$('#config-status').after(el);}el.hidden=false;el.innerHTML=actionDiagnosticHTML(report);
+ const button=document.createElement('button');button.type='button';button.className='text-button';button.textContent='下载公司行动核验报告';button.onclick=()=>download(report.symbol+'-公司行动核验报告.json',JSON.stringify(report,null,2),'application/json');el.append(button);
+}
 function showReconciliation(error){
+  showActionDiagnostics(error.details?.actionDiagnostics??(activeBundle&&qualityReport?actionDiagnosticReport(activeBundle,qualityReport,activeSnapshotId?[{id:activeSnapshotId,bundle:activeBundle}]:[]):null));
   reconciliation=error.details?.reconciliation;
   const symbol=$('#backtest-symbol').value.trim();
   if(!reconciliation&&activeBundle&&symbol===activeBundle.metadata.symbol&&qualityReport?.issues.some(i=>['DAILY_CROSSCHECK','DAILY_OHLC_CROSSCHECK'].includes(i.code)))reconciliation=reconciliationReport(activeBundle,qualityReport,activeSnapshotId?[{id:activeSnapshotId,bundle:activeBundle}]:[]);
@@ -113,6 +125,7 @@ function renderQuality(){
   repairUI?.context();
   const el=$('#quality-status');if(!activeBundle){el.innerHTML=source==='demo'?'<strong>合成演示 · 不属于真实行情验证</strong><p class="help">演示日历只排除周末，仅用于体验策略与成交流程。</p>':'<strong class="quality-blocked">CSV 完整性未验证</strong><p class="help">无法核对整日缺失、历史 ST、公司行动和因子。当时是否沪深 300 成分股也需独立资料。只可做探索研究。</p>';return;}
   const q=qualityReport,m=activeBundle.metadata;el.innerHTML=`<div class="quality-summary"><span class="quality-${q.status}">${esc(q.label)}</span><span>${esc(boardNames[m.board]||'板块缺失')} · ${esc(m.symbol)}</span><span>${q.completeSessions} / ${q.sessions} 个完整交易日</span><span>${q.suspendedSessions} 个已确认停牌日</span></div><p class="help">请求含预热：${esc(q.requested.from)} — ${esc(q.requested.to)}<br>实际返回：${esc(q.actual.from||'无')} — ${esc(q.actual.to||'无')} · ${num(q.actual.bars,0)} 根</p>${q.issues.length?'<ul class="quality-issues">'+q.issues.map(x=>`<li class="quality-${x.severity==='warning'?'warning':'blocked'}"><strong>${x.severity==='warning'?'警告 · 可继续回测':'阻断 · 请补齐资料'}：${esc(x.message)}（${x.count}）</strong>${x.samples.length?'<small>'+esc(x.samples.join('、'))+'</small>':''}</li>`).join('')+'</ul>':'<p>逐日网格、历史状态、独立日线与除权因子链校验通过。</p>'}<p class="help">${esc(q.warning)}</p>`;
+  const diagnostic=actionDiagnosticReport(activeBundle,q,activeSnapshotId?[{id:activeSnapshotId,bundle:activeBundle}]:[]);if(diagnostic){const block=document.createElement('div');block.innerHTML=actionDiagnosticHTML(diagnostic);el.append(block);const button=document.createElement('button');button.type='button';button.className='text-button';button.textContent='下载公司行动核验报告';button.onclick=()=>download(diagnostic.symbol+'-公司行动核验报告.json',JSON.stringify(diagnostic,null,2),'application/json');el.append(button);}
 }
 async function loadBundle(b,name,persist=false,snapshotId=null){
   if(!b?.bars?.length)throw Error('数据包没有可预览行情。');$('#data-mode').value=bundleMode(b);activeSnapshotId=snapshotId;importedSnapshotId=snapshotId;const q=selectedAudit(b);if(!b.bars.length)throw Error('数据包没有可预览行情。');activeBundle=b;importedBundle=b;qualityReport=q;data=b.bars;importedData=data;dataName=b.metadata.symbol+' · '+(b.metadata.name||name);importedName=dataName;source='bundle';$('#backtest-symbol').value=b.metadata.symbol;let opt=$('#dataset option[value="import"]');if(!opt){opt=document.createElement('option');opt.value='import';$('#dataset').append(opt);}opt.textContent=b.metadata.symbol+' · 已载入数据包';$('#dataset').value=snapshotId&&backtestSnapshots.has(snapshotId)?'snapshot:'+snapshotId:'import';$('#board').value=b.metadata.board||'main';$('#board').disabled=true;setImportPeriod();updateSource();renderData();renderQuality();markDirty();$('#import-status').textContent=q.label+'；'+data.length+' 根行情。';
@@ -183,7 +196,7 @@ function duration(ms){if(!Number.isFinite(ms))return '未记录';const s=Math.fl
 const queryNames={calendar:'交易日历',basic:'证券资料',daily:'独立日线',factors:'复权因子',dividends:'公司行动',hs300:'历史沪深300名单',minute:'5分钟K线'};
 function researchIncremental(j){
   const p=j.collectionPlan,u=j.sourceUsage;
-  return `${p?`<p class="task-timing">增量采集：跨任务复用 ${p.reusedTradingDays} 个交易日 · 分钟补采计划 ${p.plannedFetchQueries} 段（实际请求数见日志）</p>`:''}${u?`<p class="task-timing">BaoStock 日累计 ${u.requests} / ${u.budget} 次 · 北京时间 ${esc(u.day)} · 本机共享计数，含分页</p>`:''}`;
+  return `${p?`<p class="task-timing">增量采集：跨任务复用 ${p.reusedTradingDays} 个交易日 · 分钟补采计划 ${p.plannedFetchQueries} 段（实际请求数见日志）</p>`:''}${trafficUsageHTML(u)}`;
 }
 function researchTiming(j){
   const t=j.timing;if(!t)return '<p>旧任务尚无耗时记录，升级后开始累计。</p>';
@@ -261,6 +274,7 @@ async function refreshSources(){
   }catch(e){$('#sources-status').textContent=e.message;}finally{button.disabled=false;}
 }
 $('#sources-refresh').onclick=()=>refreshSources();refreshSources();
+$('#traffic-check').onclick=async()=>{const button=$('#traffic-check');button.disabled=true;$('#traffic-status').textContent='正在查询监控 IP 和本机用量，保留已有预算；不调用 BaoStock SDK。';try{const usage=await api('/api/research/traffic',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});$('#traffic-status').innerHTML=trafficUsageHTML(usage);}catch(e){$('#traffic-status').textContent=e.message;}finally{button.disabled=false;}};
 $('#lixinger-probe').onclick=async()=>{const button=$('#lixinger-probe');button.disabled=true;try{const v=await api('/api/sources/lixinger/probe',{method:'POST'});await refreshSources();toast(v.ok?'理杏仁日线验证通过'+(v.cached?'（缓存）':''):'理杏仁验证未通过：'+v.code);}catch(e){toast(e.message);}finally{button.disabled=false;}};
 
 // The extracted local bundle omits the downloadable archive to avoid nesting.

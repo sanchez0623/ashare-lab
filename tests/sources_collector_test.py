@@ -1,7 +1,7 @@
 import datetime as dt,json,pathlib,sys,unittest
 from unittest.mock import Mock,patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'collector'))
-from sources import DataSource,SourceBatch,SourceError,SourceRouter,BaoStockSource,AkShareSource,MootdxSource,LixingerSource,SinaSource,registry,status,http_session,validate_batch
+from sources import DataSource,SourceBatch,SourceError,SourceRouter,BaoStockSource,AkShareSource,MootdxSource,LixingerSource,SinaSource,registry,status,http_session,validate_batch,bounded_requests
 
 def daily(dates):return [{'date':d,'open':10.,'high':11.,'low':9.,'close':10.,'volume':1000.} for d in dates]
 def minute(dates):
@@ -94,4 +94,14 @@ class SourceTests(unittest.TestCase):
             s=http_session();self.assertTrue(s.trust_env);s.close()
         with patch('sources.pathlib.Path.exists',return_value=False),patch.dict('sources.os.environ',{'ASHARE_HTTP_TRUST_ENV':'0'}):
             s=http_session();self.assertFalse(s.trust_env);s.close()
+    def test_akshare_own_sessions_honor_local_proxy_override_and_restore_on_error(self):
+        import requests
+        for managed in (True,False):
+            session=requests.Session();seen=[]
+            def request(client,*args,**kwargs):
+                seen.append((client.trust_env,kwargs['timeout']));raise RuntimeError('simulated failure')
+            with patch('sources.pathlib.Path.exists',return_value=managed),patch.dict('sources.os.environ',{'ASHARE_HTTP_TRUST_ENV':'0'}),patch('requests.sessions.Session.request',request):
+                with bounded_requests():
+                    with self.assertRaises(RuntimeError):session.get('https://example.invalid')
+            self.assertEqual(seen,[(managed,30)]);self.assertTrue(session.trust_env);session.close()
 if __name__=='__main__':unittest.main()

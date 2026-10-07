@@ -108,6 +108,7 @@ def collect(request,root,store,emit=lambda x:None,parent=None,bs=None,guard_fact
             import baostock as bs
             from baostock_guard import TrafficGuard,install
             guard=(guard_factory or TrafficGuard)(limit=request.get('budget',10000))
+            emit({'stage':'collect','phase':'traffic-start','sourceUsage':guard.usage(),'message':'已读取本机共享预算与监控IP；官方额度按公网IP统计，本机记录不含其他设备，IP变化不重置日预算'})
             reserve=guard.reserve
             def checked_reserve():check();reserve()
             guard.reserve=checked_reserve;restore=install(guard)
@@ -206,7 +207,8 @@ def collect(request,root,store,emit=lambda x:None,parent=None,bs=None,guard_fact
             except Exception:pass
         if guard:
             usage=guard.usage()
-            emit({'stage':'collect','phase':'traffic-summary','sourceUsage':usage,'message':f'BaoStock本次SDK请求{usage["sessionRequests"]}次；北京时间{usage["day"]}本机日累计{usage["requests"]}/{usage["budget"]}次，含登录、分页和登出'})
+            monitor=usage.get('monitorIP',{})
+            emit({'stage':'collect','phase':'traffic-summary','sourceUsage':usage,'message':f'BaoStock本次SDK请求{usage["sessionRequests"]}次；北京时间{usage["day"]}本机日累计{usage["requests"]}/{usage["budget"]}次，监控IP {monitor.get("ip") or "未识别"}；官方50000次/日按公网IP，本机记录不含其他设备，含登录、分页和登出'})
         if restore:restore()
         if guard:guard.close()
         lock.close()
