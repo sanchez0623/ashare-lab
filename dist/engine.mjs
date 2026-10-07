@@ -254,6 +254,7 @@ export function backtest(input,config={}) {
   const maxdd=curve.reduce((m,r)=>Math.min(m,r.drawdown),0),wins=closed.filter(t=>t.pnl>0),losses=closed.filter(t=>t.pnl<0);
   const incomplete=groups.filter(g=>!g.complete).map(g=>g.date);
   const warnings=[];
+  if(qualityReport?.warnings?.length)warnings.push('带量价警告回测（'+qualityReport.warningCount+'项）：'+qualityReport.warnings.map(x=>x.message+'（'+x.count+'）').join('；')+'。仍使用原始K线，未修复、未按日线缩放；差异可能影响突破、ATR、做T和估值，不能认定对结果无影响。');
   if(metadata&&c.dataMode==='single')warnings.push('单标的回测：不限制也未核验历史沪深300成员资格；历史ST、停牌、分钟完整性和公司行动仍按完整数据校验。');
   if(actions.some(a=>a.cashBasis==='gross'))warnings.push('股息按税前金额核算，未计算个人持有期补税。');
   if(!metadata&&config.dataMode==='exploration')warnings.push('CSV探索：历史ST、成分股、公司行动与整日缺口未校验；不得将该结果视作正式研究。');

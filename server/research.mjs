@@ -5,7 +5,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {spawn,execFile} from 'node:child_process';
 import {Worker} from 'node:worker_threads';
 import {defaults,validate} from '../dist/engine.mjs';
-import {auditBundle} from '../dist/quality.mjs';
+import {auditBundle,auditDisposition,isAuditAdmitted} from '../dist/quality.mjs';
 import {resampleData} from '../dist/data.mjs';
 import {parseCollectionCodes,batchLimit} from '../dist/collection-batch.mjs';
 import {requiredWarmupSessions} from '../dist/research-input.mjs';
@@ -20,7 +20,7 @@ const failure=(code,message,details)=>Object.assign(Error(message),{code,details
 // Research jobs remain pinned to their strategy engine; collection-only jobs
 // never execute that engine. All collection responses are still revalidated.
 // Unknown pipelines still cannot reuse old work.
-const compatiblePipelines=new Set(['cbfe084871bf787bdd04c3a66462968ba036ab9372758022b316883befd22230','5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c']);
+const compatiblePipelines=new Set(['cbfe084871bf787bdd04c3a66462968ba036ab9372758022b316883befd22230','5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c','4b3ee26892f85078e72336fa3c010116d812272e8f16b5a4189fa6702062cb13']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:canonical(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 export function yearStart(to){const d=new Date(to+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);d.setUTCFullYear(d.getUTCFullYear()-1);return d.toISOString().slice(0,10);}
 export function normalizeRequest(input){
@@ -60,7 +60,8 @@ export function acceptanceAudit(bundle,request){
   const code=(request.symbol.startsWith('6')?'sh.':'sz.')+request.symbol;
   if(!collectOnly&&!(bundle.universe??[]).some(u=>u.date>=request.from&&u.date<=request.to&&u.codes?.includes(code)))add('HISTORICAL_MEMBER','研究区间内未证明曾为沪深300成分股');
   if(!rows.some(r=>r.date.slice(0,10)>=request.from&&r.date.slice(0,10)<=request.to))add('RESEARCH_EMPTY','研究区间无分钟数据');
-  return {...quality,status:issues.length?'blocked':'passed',...(collectOnly?{scope:'market-data-only',label:issues.length?'行情已保存，存在资料问题':'行情完整性校验通过，未核验指数成员'}:{}),issues,warmupSessions:warm.length,requiredWarmup:request.warmupSessions,research:{from:request.from,to:request.to},synthetic:m.synthetic===true};
+  const disposition=auditDisposition(issues),label=disposition.status==='blocked'?(collectOnly?'行情已保存，存在阻断问题':'不可正式回测'):disposition.status==='warning'?'可回测 · 存在量价警告（未修复）':collectOnly?'行情完整性校验通过，未核验指数成员':quality.label;
+  return {...quality,...disposition,label,...(collectOnly?{scope:'market-data-only'}:{}),issues,warmupSessions:warm.length,requiredWarmup:request.warmupSessions,research:{from:request.from,to:request.to},synthetic:m.synthetic===true};
 }
 // Separate accounting checks use raw closing prices, quantities and fees from
 // saved outputs. This is deliberately independent of the engine's NAV formula.
@@ -198,29 +199,29 @@ export class ResearchManager {
       else {await this.collectPython(job,collection);bytes=await readFile(path.join(collection,'bundle.json'));const receipt=JSON.parse(await readFile(path.join(collection,'receipt.json'),'utf8'));if(hash(bytes)!==receipt.sha256)throw failure('CACHE_HASH','采集结果与检查点回执不符');bundle=JSON.parse(bytes);bytes=Buffer.from(canonical(bundle));}
     }
     await this.stage(job,'validate','逐日核验48根原生5分钟、日线量价、历史ST、预热及除权因子');job.quality=acceptanceAudit(bundle,job.request);await this.save(job);
-    if(job.quality.status!=='passed'&&job.request.purpose!=='collect')throw failure('DATA_ADMISSION','资料未通过正式准入；保留缺口报告',job.quality.issues);
+    if(!isAuditAdmitted(job.quality)&&job.request.purpose!=='collect')throw failure('DATA_ADMISSION','资料未通过正式准入；保留缺口报告',job.quality.blockingIssues);
     await this.stage(job,'ingest','保存不可变行情快照并读回核对SHA-256');const id=hash(bytes);
     const old=await this.bucket.get('snapshots/'+id+'.json');if(old&&hash(Buffer.from(old.body))!==id)throw failure('SNAPSHOT_HASH','仓库已有对象哈希不符');
     if(!old)await this.bucket.put('snapshots/'+id+'.json',bytes);
-    const manifest={id,symbol:bundle.metadata.symbol,name:bundle.metadata.name??'',board:bundle.metadata.board,timeframe:'5m',source:bundle.metadata.source,syncedAt:job.createdAt,bytes:bytes.length,report:auditBundle(bundle)};
+    const manifest={id,symbol:bundle.metadata.symbol,name:bundle.metadata.name??'',board:bundle.metadata.board,timeframe:'5m',source:bundle.metadata.source,syncedAt:job.createdAt,bytes:bytes.length,report:auditBundle(bundle,{scope:job.request.purpose==='collect'?'single-security':'hs300'})};
     if(!await this.bucket.get('manifests/'+id+'.json'))await this.bucket.put('manifests/'+id+'.json',canonical(manifest));
     if(hash(Buffer.from((await this.bucket.get('snapshots/'+id+'.json')).body))!==id)throw failure('SNAPSHOT_HASH','入库后读回核对失败');job.snapshotId=id;await this.save(job);
     const snapshot=this.location(job.id,'input.json');await atomic(snapshot,bytes.toString('utf8'));
     if(job.request.purpose==='collect'){
       // Collection preserves incomplete raw evidence too, but never runs the
       // engine or claims HS300 research admission. Formal audit stays strict.
-      job.acceptance=bundle.metadata.synthetic?'synthetic-test-only':job.quality.status==='passed'?'market-data-only':'market-data-incomplete';job.resultHash=id;
+      job.acceptance=bundle.metadata.synthetic?'synthetic-test-only':job.quality.status==='warning'?'market-data-with-warnings':job.quality.status==='passed'?'market-data-only':'market-data-incomplete';job.resultHash=id;
       await this.stage(job,'report','保存行情采集报告；未进行策略回测或指数成员资格校验');
       await this.saveReport(job,{schemaVersion:1,acceptance:job.acceptance,input:{requestHash:job.requestHash,pipelineHash:job.pipelineHash,snapshotId:id},request:job.request,quality:job.quality,collection:{bars:bundle.bars.length,daily:bundle.daily.length,membershipChecked:false,incremental:bundle.metadata.incrementalPlan??null},limitations:['此报告仅确认行情采集和完整性，不是沪深300正式回测准入或盈利证明','存在资料问题时保留原始行情和问题清单，不补造缺失数据']});
-      stopTiming(job,this.clock(),'completed');job.status='completed';job.stage='completed';delete job.error;await this.save(job,job.quality.status==='passed'?'行情采集完成，已入库；未查询指数成员、未运行回测':'行情已入库，存在资料问题，请查看报告');return;
+      stopTiming(job,this.clock(),'completed');job.status='completed';job.stage='completed';delete job.error;await this.save(job,job.quality.status==='warning'?'行情已入库，可带量价警告回测；数据未修复，未查询指数成员':job.quality.status==='passed'?'行情采集完成，已入库；未查询指数成员、未运行回测':'行情已入库，存在阻断问题，请查看报告');return;
     }
     const runConfig={...cfg,snapshotId:id};
     await this.stage(job,'backtest','后台运行回测；网页关闭后任务仍继续');const first=await this.runEngine(job,snapshot,runConfig);this.check(job);
     await this.stage(job,'verify','使用同一快照和参数独立重跑，并核对资产及费用');const second=await this.runEngine(job,snapshot,runConfig);const firstHash=hash(canonical(first)),secondHash=hash(canonical(second));
     if(firstHash!==secondHash||job.expectedResultHash&&firstHash!==job.expectedResultHash)throw failure('REPRODUCIBILITY','相同输入得到不同结果，验收失败');
-    const accounting=auditAccounting(first,bundle);job.resultHash=firstHash;job.acceptance=bundle.metadata.synthetic?'synthetic-test-only':'passed';
+    const accounting=auditAccounting(first,bundle);job.resultHash=firstHash;job.acceptance=bundle.metadata.synthetic?'synthetic-test-only':job.quality.status==='warning'?'passed-with-warnings':'passed';
     const report={schemaVersion:1,acceptance:job.acceptance,input:{requestHash:job.requestHash,configHash:job.configHash,engineHash:job.engineHash,pipelineHash:job.pipelineHash,snapshotId:id,runtime:{node:process.versions.node}},request:job.request,quality:job.quality,reproducibility:{status:'passed',runs:2,resultHash:firstHash,repeatedHash:secondHash},accounting,result:first,limitations:['历史沪深300成员按BaoStock周度快照；不证明交易所逐事件历史可得性','公司行动资料不完整或遇到未支持的配股时阻止正式回测','单标的历史样本不保证盈利；未平仓和未配对T均保留在报告']};
-    await this.stage(job,'report','保存完整报告、交易明细与净值曲线');await this.saveReport(job,report);job.metrics=first.metrics;stopTiming(job,this.clock(),'completed');job.status='completed';job.stage='completed';delete job.error;await this.save(job,job.acceptance==='passed'?'真实数据流程验收通过（不代表策略盈利）':'合成夹具流程测试完成，不属于真实数据验收');
+    await this.stage(job,'report','保存完整报告、交易明细与净值曲线');await this.saveReport(job,report);job.metrics=first.metrics;stopTiming(job,this.clock(),'completed');job.status='completed';job.stage='completed';delete job.error;await this.save(job,job.quality.status==='warning'?'回测完成，量价警告已写入报告；不代表数据已修复或策略盈利':job.acceptance==='passed'?'真实数据流程验收通过（不代表策略盈利）':'合成夹具流程测试完成，不属于真实数据验收');
   }
   async saveReport(job,report){const bytes=canonical(report),id=hash(bytes);await atomic(path.join(this.root,'reports',id+'.json'),bytes);job.reportHash=id;job.reportRun=job.timing.runs.length;await this.save(job);}
   async python(){if(process.env.ASHARE_PYTHON)return process.env.ASHARE_PYTHON;for(const base of ['collector/.venv','.venv']){const venv=path.join(project,base,process.platform==='win32'?'Scripts/python.exe':'bin/python');try{await access(venv);return venv;}catch{}}return process.platform==='win32'?'python':'python3';}

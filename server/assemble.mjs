@@ -1,4 +1,4 @@
-import {auditBundle} from '../dist/quality.mjs';
+import {auditBundle,isAuditAdmitted} from '../dist/quality.mjs';
 import {reconciliationReport} from '../dist/reconciliation.mjs';
 import {verifyRepairSnapshot,rawBar,stable} from '../dist/minute-repair.mjs';
 export const canonical=value=>JSON.stringify(value,(_key,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
@@ -63,10 +63,10 @@ export function assembleBundles(parents,{symbol,from,to,warmupSessions=60},{veri
   metadata.conflicts=parents.flatMap(p=>p.bundle.metadata.conflicts??[]).filter(d=>!d.date||between(d.date.slice(0,10),range));
   const bundle={schemaVersion:1,metadata,calendar,daily:dayRows,bars:[...bars.values()].filter(r=>between(r.date.slice(0,10),range)).sort((a,b)=>a.date.localeCompare(b.date)),actions:[...actions.values()].filter(r=>between(r.exDate,range)).sort((a,b)=>a.exDate.localeCompare(b.exDate)).map((r,i)=>({...r,id:symbol+'-'+r.exDate+'-'+i})),factors:[...factors.values()].filter(r=>between(r.dividOperateDate??r.exDate,range)).sort((a,b)=>(a.dividOperateDate??a.exDate).localeCompare(b.dividOperateDate??b.exDate)),universe:hs300?[...universe.values()].filter(r=>between(r.date,range)).sort((a,b)=>a.date.localeCompare(b.date)):[]};
   if(bundle.bars.length>120000)fail('ASSEMBLY_SIZE','合并快照超过120,000根行情，请缩小区间。');
-  const report=auditBundle(bundle,{scope:hs300?'hs300':'single-security'});if(report.status!=='passed'){
+  const report=auditBundle(bundle,{scope:hs300?'hs300':'single-security'});if(!isAuditAdmitted(report)){
     const reconciliation=reconciliationReport(bundle,report,parents),detail=reconciliation?.summary;
     const explanation=detail?`量价不一致 ${detail.failedChecks} 项，涉及 ${detail.affectedDays} 日：收盘价 ${detail.priceChecks} 项、成交量 ${detail.volumeChecks} 项${detail.openChecks||detail.highChecks||detail.lowChecks?`、开盘 ${detail.openChecks} 项、最高 ${detail.highChecks} 项、最低 ${detail.lowChecks} 项`:''}。${detail.sourceMismatchDays?`${detail.sourceMismatchDays} 日的差异在原快照中已存在。`:''}请下载量价核验报告查看日期和原始值，或在本地“分钟第二源核验 / 修复”中核验原始快照；暂不需要重复采集整段历史。`:'请核对对应日期资料。';
-    fail('ASSEMBLY_ADMISSION','已有数据合并后仍未通过完整性校验：'+report.issues.map(i=>i.message+'（'+i.count+'）').join('；')+'。'+explanation,{issues:report.issues,reconciliation});
+    fail('ASSEMBLY_ADMISSION','已有数据合并后仍未通过完整性校验：'+report.blockingIssues.map(i=>i.message+'（'+i.count+'）').join('；')+'。'+explanation,{issues:report.issues,reconciliation});
   }
   return {bundle,report};
 }
@@ -78,7 +78,7 @@ export async function assembleStored(bucket,input){
   for(const id of ids){const obj=await bucket.get('snapshots/'+id+'.json');if(!obj)fail('ASSEMBLY_MISSING','来源快照不存在：'+id.slice(0,12));const bytes=new Uint8Array(await new Response(obj.body).arrayBuffer());total+=bytes.length;if(total>40*1024*1024)fail('ASSEMBLY_SIZE','来源快照合计超过40MB，请减少区间或来源数量。');if(await sha256(bytes)!==id)fail('SNAPSHOT_HASH','来源快照SHA-256不符，已拒绝合并：'+id.slice(0,12));parents.push({id,bundle:JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes))});}
   const verifiedRepairs=new Set();for(const p of parents)if(p.bundle.metadata.minuteRepair){await verifyRepairSnapshot(p.bundle);verifiedRepairs.add(p.id);}
   const {bundle,report}=assembleBundles(parents,input,{verifiedRepairs}),bytes=new TextEncoder().encode(canonical(bundle));if(bytes.length>25*1024*1024)fail('ASSEMBLY_SIZE','合并快照超过25MB，请缩小区间。');
-  const id=await sha256(bytes),key='manifests/'+id+'.json',existing=await bucket.get(key);if(existing){const saved=await bucket.get('snapshots/'+id+'.json');if(!saved||await sha256(new Uint8Array(await new Response(saved.body).arrayBuffer()))!==id)fail('SNAPSHOT_HASH','已保存的合并快照哈希不符。');return {...await existing.json(),reused:true};}
+  const id=await sha256(bytes),key='manifests/'+id+'.json',existing=await bucket.get(key);if(existing){const saved=await bucket.get('snapshots/'+id+'.json');if(!saved||await sha256(new Uint8Array(await new Response(saved.body).arrayBuffer()))!==id)fail('SNAPSHOT_HASH','已保存的合并快照哈希不符。');return {...await existing.json(),report,reused:true};}
   const m=bundle.metadata,manifest={id,symbol:m.symbol,name:m.name,board:m.board,timeframe:m.timeframe,source:m.source,research:m.research,assembly:m.assembly,...(m.minuteRepair?{minuteRepair:{baseSnapshotId:m.minuteRepair.baseSnapshotId,verifiedDays:m.minuteRepair.days.length}}:{}),syncedAt:new Date().toISOString(),bytes:bytes.length,report};
   await bucket.put('snapshots/'+id+'.json',bytes,{httpMetadata:{contentType:'application/json'}});const stored=await bucket.get('snapshots/'+id+'.json');if(!stored||await sha256(new Uint8Array(await new Response(stored.body).arrayBuffer()))!==id)fail('SNAPSHOT_HASH','合并快照写入后哈希核对失败。');
   await bucket.put(key,canonical(manifest),{httpMetadata:{contentType:'application/json'}});return manifest;

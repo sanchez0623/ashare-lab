@@ -36,7 +36,7 @@ export default {async fetch(request,env){
       const bytes=new Uint8Array(size);let offset=0;for(const x of chunks){bytes.set(x,offset);offset+=x.length;}
       let bundle;try{bundle=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{return reply({error:'JSON 或 UTF-8 编码无效'},400);}
       if(bundle.bars?.length>120000)return reply({error:'单快照最多 120,000 根行情，较长历史请分段采集'},400);
-      let report;try{report=auditBundle(bundle);}catch(e){return reply({error:e.message},400);}
+      let report;try{report=auditBundle(bundle,{scope:bundle.metadata?.collectionPurpose==='market-data-only'||bundle.metadata?.universe==='SINGLE_SECURITY'?'single-security':'hs300'});}catch(e){return reply({error:e.message},400);}
       if(bundle.metadata?.minuteRepair)await verifyRepairSnapshot(bundle);
       const digest=await crypto.subtle.digest('SHA-256',bytes),id=[...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');
       const key='manifests/'+id+'.json',existing=await env.BUCKET.get(key);if(existing)return reply({...await existing.json(),reused:true});

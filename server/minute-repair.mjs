@@ -52,7 +52,7 @@ export class MinuteRepairManager {
         const result=await makeRepair(bundle,j.request.baseSnapshotId,batches);j.verifiedDays=result.report.verifiedDays;j.unresolved=result.report.unresolved;await this.save(j,'已核验可替代 '+j.verifiedDays+' / '+j.targetDays+' 个异常日');if(result.bundle)break;
       }
       this.check(j);j.stage='validate';const result=await makeRepair(bundle,j.request.baseSnapshotId,batches);result.report.connectionAttempts=j.attempts;const reportBody=stable(result.report);j.reportHash=hash(reportBody);await atomic(this.location(j.id,'reports/'+j.reportHash+'.json'),reportBody);j.verifiedDays=result.report.verifiedDays;j.unresolved=result.report.unresolved;await this.save(j);
-      if(!result.bundle)throw error('REPAIR_COVERAGE','仍有 '+result.report.unresolved.length+' 个日期没有通过核验的独立5分钟数据。原快照保留，严格回测继续阻止；请下载第二源核验报告。');
+      if(!result.bundle)throw error('REPAIR_COVERAGE','仍有 '+result.report.unresolved.length+' 个日期没有通过核验的独立5分钟数据，未生成修复快照。原快照保留；若只有量价差异，可带警告回测，但不能认定数据已修复。请下载第二源核验报告。');
       this.check(j);j.stage='archive';await this.save(j,'全部异常日期已验证，生成新的Parquet归档和不可变快照');let repaired=result.bundle;
       if(this.archiver)repaired=await this.archiver(repaired,this.location(j.id,'archive'),j.controller.signal);else repaired=await this.archivePython(j,repaired);
       this.check(j);await verifyRepairSnapshot(repaired);const bytes=Buffer.from(stable(repaired)),id=hash(bytes);const prior=await this.bucket.get('snapshots/'+id+'.json');if(prior&&hash(Buffer.from(await new Response(prior.body).arrayBuffer()))!==id)throw error('REPAIR_HASH','仓库同名修复快照哈希冲突');if(!prior)await this.bucket.put('snapshots/'+id+'.json',bytes);

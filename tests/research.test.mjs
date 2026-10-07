@@ -40,6 +40,11 @@ test('collection-only persists raw data without membership or backtest; formal a
   assert.throws(()=>normalizeRequest({...req,purpose:'unknown'}),e=>e.code==='REQUEST');
  }finally{await ctx.manager.close();await rm(ctx.dir,{recursive:true,force:true});}
 });
+test('background research saves and reproduces warning-only data without claiming it was repaired',async()=>{
+ const b=dataset(),day=b.calendar[180];for(const r of b.bars)if(r.date.startsWith(day))r.volume*=1.01;const before=canonical(b),ctx=await setup(async()=>b);
+ try{const j=await ctx.manager.create(input(b)),done=await until(ctx.manager,j.id);assert.equal(done.status,'completed',JSON.stringify(done.error));assert.equal(done.quality.status,'warning');const report=JSON.parse(await ctx.manager.report(done));assert.equal(report.quality.warningCount,1);assert.equal(report.result.audit.qualityReport.status,'warning');assert.ok(report.result.warnings.some(w=>w.includes('未修复')));assert.equal(report.reproducibility.status,'passed');assert.equal(report.accounting.status,'passed');assert.equal(report.acceptance,'synthetic-test-only');assert.equal(canonical(b),before);const replay=await ctx.manager.repeat(done.id),again=await until(ctx.manager,replay.id);assert.equal(again.reportHash,done.reportHash);
+ }finally{await ctx.manager.close();await rm(ctx.dir,{recursive:true,force:true});}
+});
 test('job timing and query diagnostics persist over pause/restart and stay separate from result reports',async()=>{
  const b=dataset(),dir=await mkdtemp(path.join(tmpdir(),'ashare-timing-')),bucket=new FileBucket(path.join(dir,'warehouse'));let tick=100000,waiting=true;
  const collect=async(_r,_p,signal,progress)=>{

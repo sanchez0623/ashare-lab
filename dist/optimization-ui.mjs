@@ -8,7 +8,7 @@ export function setupOptimization({getContext,setConfig,showView,runBacktest,not
   const changeNames={dailySlow:'日线长均线',atrMult:'ATR跟踪倍数',confirmationDays:'连续确认',management:'仓位方案'};
   const options=()=>Object.fromEntries([...new FormData($('#tuning-form'))].map(([k,v])=>[k,Number(v)]));
   let activeRun=null,report=null,reportData=null;
-  const sourceLabel=context=>context.source==='demo'||context.data?.metadata?.synthetic?'合成数据 · 仅验证功能流程':context.source==='bundle'?(context.quality?.status==='passed'?'行情数据包 · 结构校验通过':'行情数据包 · 资料未通过准入'):'CSV探索 · 历史资料未校验';
+  const sourceLabel=context=>context.source==='demo'||context.data?.metadata?.synthetic?'合成数据 · 仅验证功能流程':context.source==='bundle'?(context.quality?.status==='warning'?'行情数据包 · 带量价警告（未修复）':context.quality?.status==='passed'?'行情数据包 · 结构校验通过':'行情数据包 · 资料未通过准入'):'CSV探索 · 历史资料未校验';
   function refresh(){
     const context=getContext(),c=context.config;
     document.querySelectorAll('[data-training-key]').forEach(input=>{if(document.activeElement!==input)input.value=c[input.dataset.trainingKey];});

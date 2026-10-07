@@ -28,7 +28,7 @@ export function reconciliationReport(bundle,report,parents=[]){
     row.origin=failed.every(k=>row.parents.some(p=>p[k].checked&&!p[k].passed&&p[k].minute===row[k].minute&&p[k].daily===row[k].daily))?'source-snapshot':row.parents.length?'assembly-only':'unknown';
     rows.push(row);
   }
-  return {schemaVersion:1,kind:'minute-daily-reconciliation',symbol:bundle.metadata.symbol,source:bundle.metadata.source,
+  return {schemaVersion:1,kind:'minute-daily-reconciliation',auditVersion:report.version,admissionStatus:report.status,admissionPolicy:report.admissionPolicy,dataRepaired:false,symbol:bundle.metadata.symbol,source:bundle.metadata.source,
     requested:bundle.metadata.requested,research:bundle.metadata.research??null,priceBasis:bundle.metadata.priceBasis,volumeUnit:bundle.metadata.volumeUnit,timeframe:bundle.metadata.timeframe,
     thresholds:{closeAbsolute:.011,volumeAbsoluteMinimum:100,volumeRelative:.005},
     summary:{failedChecks:issues.reduce((s,i)=>s+i.count,0),affectedDays:rows.length,priceChecks:rows.filter(r=>r.metrics.includes('close')).length,openChecks:rows.filter(r=>r.metrics.includes('open')).length,highChecks:rows.filter(r=>r.metrics.includes('high')).length,lowChecks:rows.filter(r=>r.metrics.includes('low')).length,volumeChecks:rows.filter(r=>r.metrics.includes('volume')).length,sourceMismatchDays:rows.filter(r=>r.origin==='source-snapshot').length,assemblyOnlyDays:rows.filter(r=>r.origin==='assembly-only').length},

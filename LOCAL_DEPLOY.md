@@ -216,7 +216,7 @@ collector/.venv/bin/python collector/sources.py --kind minute5 --purpose intrada
 
 首次提示SDK未安装时，Windows在项目目录运行 `collector\.venv\Scripts\python.exe -m pip install "mootdx>=0.11,<1"`，然后点击断点恢复。供应商历史保留范围仍须实际核验，不保证免费源具有2024年分钟档案。TCP采集在本机进行，托管版仅提供说明和部署包。
 
-核验任务及证据保存在 `.local-data/research/minute-repairs`，支持暂停、进程中断后的恢复、每5秒累计耗时、固定快照复现核验、未覆盖日期与来源错误报告。接口为 `/api/research/repairs`，原始快照请求由SHA-256固定；新修复快照仍进入原有仓库。新增开高低价校验后，旧快照可能出现旧报告未列出的极值差异。严格准入不放宽。
+核验任务及证据保存在 `.local-data/research/minute-repairs`，支持暂停恢复、累计耗时、固定快照复现核验和缺口报告。接口为 `/api/research/repairs`，原始请求由SHA-256固定。校验3.3将量价差异改为警告，原快照可带警告回测；缺分钟、无效日线、ST/公司行动/因子等硬性问题仍阻断。修复任务仍须全部异常日严格独立对账通过，不会把警告回测称为数据已修复。旧已审查采集版本可恢复，旧正式回测报告仍绑定原引擎版本。交易明细新增首页、末页和1至总页数的整数跳转。
 
 ### 原有年度任务
 
