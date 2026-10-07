@@ -26,6 +26,16 @@ const {mkdtemp,rm}=require('node:fs/promises');
   for(const width of [360,421,768,1100,1440]){await page.setViewportSize({width,height:1000});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),'overflow '+width);}
   await page.locator('nav [data-view=backtest]').click();await page.locator('[name=from]').fill('2024-04-01');await page.locator('#run').click();await page.waitForFunction(()=>!document.querySelector('#run').disabled);assert.match(await page.locator('#config-status').innerText(),/没有覆盖|预热/);assert.ok(await page.locator('#export').isDisabled());assert.equal(collectionCalls,0);
   await page.screenshot({path:'/workspace/scratch/assembled-backtest-gap.png'});assert.deepEqual(errors,[]);
+  // The old error discarded all dates and values; preserve them without permitting a backtest.
+  const badParents=structuredClone(parents),badDays=new Set(badParents[0].bundle.daily.slice(0,147).map(d=>d.date));
+  for(const p of badParents)p.bundle.metadata.symbol='002001';
+  for(const r of badParents[0].bundle.bars)if(badDays.has(r.date.slice(0,10)))r.volume*=2;
+  for(const p of badParents){const r=await page.request.post(base+'/api/data/ingest',{data:p.bundle});assert.equal(r.status(),201);}
+  await page.locator('#backtest-symbol').fill('002001');await page.locator('[name=from]').fill(input.from);await page.locator('[name=to]').fill(input.to);await page.locator('#run').click();await page.waitForFunction(()=>!document.querySelector('#run').disabled);
+  assert.match(await page.locator('#config-status').innerText(),/147/);assert.match(await page.locator('#backtest-reconciliation').innerText(),/147 个交易日/);assert.match(await page.locator('#backtest-reconciliation').innerText(),/960,000/);assert.ok(await page.locator('#export').isDisabled());assert.equal(collectionCalls,0);
+  const diagnosticDownload=page.waitForEvent('download');await page.getByRole('button',{name:'下载量价核验报告'}).click();const downloaded=await diagnosticDownload;assert.equal(downloaded.suggestedFilename(),'002001-量价核验报告.json');const diagnostic=JSON.parse(fs.readFileSync(await downloaded.path(),'utf8'));assert.equal(diagnostic.rows.length,147);assert.equal(diagnostic.summary.sourceMismatchDays,147);
+  for(const width of [360,421,828,1440]){await page.setViewportSize({width,height:1000});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),'diagnostics overflow '+width);}
+  await page.locator('[name=from]').fill('2024-10-02');assert.ok(await page.locator('#backtest-reconciliation').isHidden());assert.deepEqual(errors,[]);
   console.log('Annual snapshot assembly UI passed: 001389 two-year range, raw overlap verification, dividend deduplication and factor rebuild, persisted merged SHA, unchanged custom dates/fees, 5m/15m/daily on one snapshot, no provider calls, enabled collection execution choices, missing history blocks and five viewport widths. Synthetic fixtures only.');
  }finally{await browser.close();await new Promise(r=>server.close(r));await rm(dir,{recursive:true,force:true});}
 })().catch(e=>{console.error(e);process.exit(1);});

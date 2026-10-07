@@ -1,4 +1,5 @@
 import {auditBundle} from '../dist/quality.mjs';
+import {reconciliationReport} from '../dist/reconciliation.mjs';
 export const canonical=value=>JSON.stringify(value,(_key,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
 const fail=(code,message,details)=>{throw Object.assign(Error(message),{code,status:409,details});};
 const date=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;
@@ -49,7 +50,11 @@ export function assembleBundles(parents,{symbol,from,to,warmupSessions=60}){
   metadata.conflicts=parents.flatMap(p=>p.bundle.metadata.conflicts??[]).filter(d=>!d.date||between(d.date.slice(0,10),range));
   const bundle={schemaVersion:1,metadata,calendar,daily:dayRows,bars:[...bars.values()].filter(r=>between(r.date.slice(0,10),range)).sort((a,b)=>a.date.localeCompare(b.date)),actions:[...actions.values()].filter(r=>between(r.exDate,range)).sort((a,b)=>a.exDate.localeCompare(b.exDate)).map((r,i)=>({...r,id:symbol+'-'+r.exDate+'-'+i})),factors:[...factors.values()].filter(r=>between(r.dividOperateDate??r.exDate,range)).sort((a,b)=>(a.dividOperateDate??a.exDate).localeCompare(b.dividOperateDate??b.exDate)),universe:hs300?[...universe.values()].filter(r=>between(r.date,range)).sort((a,b)=>a.date.localeCompare(b.date)):[]};
   if(bundle.bars.length>120000)fail('ASSEMBLY_SIZE','合并快照超过120,000根行情，请缩小区间。');
-  const report=auditBundle(bundle,{scope:hs300?'hs300':'single-security'});if(report.status!=='passed')fail('ASSEMBLY_ADMISSION','已有数据合并后仍未通过完整性校验：'+report.issues.map(i=>i.message+'（'+i.count+'）').join('；')+'。请补齐对应日期资料。',report.issues);
+  const report=auditBundle(bundle,{scope:hs300?'hs300':'single-security'});if(report.status!=='passed'){
+    const reconciliation=reconciliationReport(bundle,report,parents),detail=reconciliation?.summary;
+    const explanation=detail?`量价不一致 ${detail.failedChecks} 项，涉及 ${detail.affectedDays} 日：收盘价 ${detail.priceChecks} 项、成交量 ${detail.volumeChecks} 项。${detail.sourceMismatchDays?`${detail.sourceMismatchDays} 日的差异在原快照中已存在。`:''}请下载量价核验报告查看日期和原始值；暂不需要重复采集整段历史。`:'请核对对应日期资料。';
+    fail('ASSEMBLY_ADMISSION','已有数据合并后仍未通过完整性校验：'+report.issues.map(i=>i.message+'（'+i.count+'）').join('；')+'。'+explanation,{issues:report.issues,reconciliation});
+  }
   return {bundle,report};
 }
 

@@ -6,6 +6,8 @@ import {backtest,defaults} from '../dist/engine.mjs';
 import {normalizeRequest} from '../server/research.mjs';import {FileBucket} from '../scripts/local-server.mjs';import worker from '../server/worker.mjs';
 const hash=x=>createHash('sha256').update(x).digest('hex');
 import {fragments} from './assembly-fixture.mjs';
+import {auditBundle} from '../dist/quality.mjs';
+import {reconciliationReport} from '../dist/reconciliation.mjs';
 test('two annual raw snapshots assemble a full two-year research and causal dividend chain',()=>{
   const {full,parents,input}=fragments(),before=canonical(parents),{bundle,report}=assembleBundles(parents,input);
   assert.equal(report.status,'passed');assert.equal(report.membershipChecked,false);assert.equal(bundle.metadata.research.from,input.from);assert.equal(bundle.metadata.requested.to,input.to);assert.equal(bundle.actions.length,2);assert.equal(new Set(bundle.actions.map(a=>a.id)).size,2);assert.equal(bundle.metadata.assembly.parents.length,2);assert.equal(bundle.metadata.parquetArchive,undefined);
@@ -46,4 +48,22 @@ test('collection execution supports 5m, 15m and daily while native acquisition r
   for(const timeframe of ['5m','15m','1d']){const r=normalizeRequest({symbol:'001389',purpose:'collect',from:'2024-10-01',to:'2026-09-30',config:{timeframe}});assert.equal(r.config.timeframe,timeframe);assert.equal(r.provider,'baostock');}
   const daily=normalizeRequest({symbol:'001389',purpose:'collect',from:'2024-10-01',to:'2026-09-30',config:{timeframe:'1d',slow:250}});assert.equal(daily.warmupSessions,251);
   assert.throws(()=>normalizeRequest({symbol:'001389',purpose:'research',to:'2026-09-30',config:{timeframe:'1d'}}),/正式验收/);
+});
+test('147 inherited volume mismatches expose every date and preserve the strict audit',()=>{
+  const {parents,input}=fragments(),bad=structuredClone(parents),days=new Set(bad[0].bundle.daily.slice(0,147).map(d=>d.date));
+  for(const r of bad[0].bundle.bars)if(days.has(r.date.slice(0,10)))r.volume*=2;
+  const before=canonical(bad);
+  assert.throws(()=>assembleBundles(bad,input),e=>{
+    assert.equal(e.code,'ASSEMBLY_ADMISSION');const d=e.details.reconciliation;
+    assert.deepEqual(d.summary,{failedChecks:147,affectedDays:147,priceChecks:0,volumeChecks:147,sourceMismatchDays:147,assemblyOnlyDays:0});
+    assert.equal(d.rows.length,147);assert.ok(d.rows.every(r=>r.bars===48&&r.volume.minute===960000&&r.volume.daily===480000&&r.volume.difference===480000&&r.volume.ratio===2&&r.volume.tolerance===2400&&r.parents[0].snapshotId===bad[0].id));
+    assert.match(e.message,/原快照/);assert.match(e.message,/147 日/);return true;
+  });
+  assert.equal(canonical(bad),before);
+});
+test('diagnostics distinguish two failed checks on one day and keep sub-cent discrepancies',()=>{
+  const {parents}=fragments(),b=structuredClone(parents[0].bundle),last=b.bars[47];last.close+=.02;last.high=Math.max(last.high,last.close);last.volume+=10000;
+  const q=auditBundle(b,{scope:'single-security'}),d=reconciliationReport(b,q);
+  assert.equal(d.summary.failedChecks,2);assert.equal(d.summary.affectedDays,1);assert.equal(d.summary.priceChecks,1);assert.equal(d.summary.volumeChecks,1);assert.ok(Math.abs(d.rows[0].close.difference-.02)<1e-10);assert.equal(d.rows[0].volume.difference,10000);assert.equal(d.rows[0].close.tolerance,.011);
+  assert.equal(q.status,'blocked');assert.equal(reconciliationReport(parents[0].bundle,auditBundle(parents[0].bundle,{scope:'single-security'})),null);
 });
