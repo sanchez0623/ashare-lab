@@ -1,4 +1,4 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="青衡A股单标的回测系统详细操作说明，覆盖采集、回测、自动微调、方案比较与报告。"><meta name="handbook-source-sha256" content="b4983adc9f881f2e0444dd16f0cfac1517d7a91d3a2fa51f5ba9fda0d9a2f32d"><title>青衡 · 详细操作说明书</title><style>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="青衡A股单标的回测系统详细操作说明，覆盖采集、回测、自动微调、方案比较与报告。"><meta name="handbook-source-sha256" content="999df1412f4aa33faac4bcf3e65ea51a69ec7e8622a80f8ada5ebdb7fad347f0"><title>青衡 · 详细操作说明书</title><style>
 :root{color-scheme:light;font-family:"Noto Sans CJK SC","Microsoft YaHei","PingFang SC",sans-serif;color:#24364b;background:#f4f6f9;font-size:15px;line-height:1.85}
 *{box-sizing:border-box}body{margin:0}a{color:#08786e;text-decoration:none}a:hover{text-decoration:underline}a:focus-visible,button:focus-visible{outline:2px solid #08786e;outline-offset:4px}
 .toolbar{display:flex;justify-content:space-between;gap:20px;padding:18px 32px;background:#14253b;color:white;align-items:center}.toolbar a{color:#b8eee3}.toolbar strong{letter-spacing:.1em}.actions{display:flex;flex-wrap:wrap;gap:18px;align-items:center}.actions button{font:inherit;background:none;border:0;color:#b8eee3;cursor:pointer;padding:0}
@@ -12,12 +12,12 @@ code{font-family:"Noto Sans Mono CJK SC",Consolas,monospace;font-size:.88em;back
 </style></head><body>
 <header class="toolbar"><strong>青衡 · 操作说明书</strong><nav class="actions" aria-label="说明书操作"><a href="./index.html">返回系统</a><a href="./guide.pdf" download="青衡详细操作说明书.pdf">下载PDF</a><a href="./USER_GUIDE.md" download="青衡详细操作说明书.md">下载Markdown</a><button type="button" id="print-guide">打印 / 另存为PDF</button></nav></header>
 <div class="page"><nav class="toc" aria-label="章节目录"><h2>章节目录</h2><ol><li><a href="#chapter-01">01 · 从哪里开始</a></li><li><a href="#chapter-02">02 · 安装、启动、停止与更新</a></li><li><a href="#chapter-03">03 · 五个页面与两种运行环境</a></li><li><a href="#chapter-04">04 · 第一次真实数据采集</a></li><li><a href="#chapter-05">05 · 查看任务、处理失败与断点恢复</a></li><li><a href="#chapter-06">06 · 手动回测：从选数据到看结果</a></li><li><a href="#chapter-07">07 · 资金、费用与参数单位</a></li><li><a href="#chapter-08">08 · 大波段信号与离场参数</a></li><li><a href="#chapter-09">09 · 底仓、趋势加仓与做T</a></li><li><a href="#chapter-10">10 · 自动微调：点击什么、如何读比较</a></li><li><a href="#chapter-11">11 · 比较五种仓位方案</a></li><li><a href="#chapter-12">12 · 判断策略好不好，以及如何小范围修改</a></li><li><a href="#chapter-13">13 · 结果指标、成交、时序和文件</a></li><li><a href="#chapter-14">14 · 导入已有数据与持久仓库</a></li><li><a href="#chapter-15">15 · 数据源、密钥与同步</a></li><li><a href="#chapter-16">16 · 防未来信息、交易规则与公司行动</a></li><li><a href="#chapter-17">17 · 保存、备份与换电脑</a></li><li><a href="#chapter-18">18 · 常见问题与排查顺序</a></li><li><a href="#chapter-19">19 · 一次可复查研究的操作清单</a></li></ol></nav><article><h1>青衡 A股单标的量化回测系统 · 详细操作说明书</h1>
-<p><strong>手册版本：1.2。适用于包含“仅采集行情”“累计耗时日志”“自定义起止日期”和“策略优化”的当前部署包。</strong></p>
-<p>本系统用于历史沪深300成分股的单标的大波段研究，包含行情采集、数据校验、回测、自动微调参数、仓位方案比较和报告导出。系统不连接交易账户，不发送真实委托。</p>
+<p><strong>手册版本：1.3。适用于包含自定义代码与回测日期、已采集快照选择、“载入并回测”、单标的完整行情校验和策略优化的当前部署包。</strong></p>
+<p>本系统用于单标的大波段研究，支持指定证券回测与历史沪深300成分股研究，包含行情采集、数据校验、回测、自动微调参数、仓位方案比较和报告导出。系统不连接交易账户，不发送真实委托。</p>
 <p>所有行情日期、交易时点和日请求预算按北京时间理解。文中的证券代码、日期和参数是操作示例，不表示行情已下载，也不表示该股票或策略已经验证盈利。</p><section class="print-toc"><h2>章节目录</h2><ol><li><a href="#chapter-01">01 · 从哪里开始</a></li><li><a href="#chapter-02">02 · 安装、启动、停止与更新</a></li><li><a href="#chapter-03">03 · 五个页面与两种运行环境</a></li><li><a href="#chapter-04">04 · 第一次真实数据采集</a></li><li><a href="#chapter-05">05 · 查看任务、处理失败与断点恢复</a></li><li><a href="#chapter-06">06 · 手动回测：从选数据到看结果</a></li><li><a href="#chapter-07">07 · 资金、费用与参数单位</a></li><li><a href="#chapter-08">08 · 大波段信号与离场参数</a></li><li><a href="#chapter-09">09 · 底仓、趋势加仓与做T</a></li><li><a href="#chapter-10">10 · 自动微调：点击什么、如何读比较</a></li><li><a href="#chapter-11">11 · 比较五种仓位方案</a></li><li><a href="#chapter-12">12 · 判断策略好不好，以及如何小范围修改</a></li><li><a href="#chapter-13">13 · 结果指标、成交、时序和文件</a></li><li><a href="#chapter-14">14 · 导入已有数据与持久仓库</a></li><li><a href="#chapter-15">15 · 数据源、密钥与同步</a></li><li><a href="#chapter-16">16 · 防未来信息、交易规则与公司行动</a></li><li><a href="#chapter-17">17 · 保存、备份与换电脑</a></li><li><a href="#chapter-18">18 · 常见问题与排查顺序</a></li><li><a href="#chapter-19">19 · 一次可复查研究的操作清单</a></li></ol></section><h2 id="chapter-01">01 · 从哪里开始</h2>
 <p>如果你已经用 <code>start-local.cmd</code> 启动成功，直接阅读第04章“第一次真实数据采集”；如果只是想熟悉页面，可以先用默认合成演示完成第06章的回测，再到第10章体验自动微调。</p>
 <p>推荐第一次使用顺序：</p>
-<ol><li>安装并启动本地服务。</li><li>安装独立的Python采集环境。</li><li>在“策略回测”确认策略、资金和费用。</li><li>在“行情数据”提交一只股票、一个研究区间的采集任务。</li><li>确认任务完成并检查数据、账务和复现报告。</li><li>通过“载入并优化”进入策略优化，或载入行情后手动回测。</li><li>比较训练和验证表现，保存回测及优化报告。</li></ol>
+<ol><li>安装并启动本地服务。</li><li>安装独立的Python采集环境。</li><li>在“策略回测”确认策略、资金和费用。</li><li>在“行情数据”提交一只股票、一个研究区间的采集任务。</li><li>确认任务完成并检查数据、账务和复现报告。</li><li>点击任务的“载入并回测”，或在回测页输入代码和自定义日期运行；随后可进入“策略优化”。</li><li>比较训练和验证表现，保存回测及优化报告。</li></ol>
 <p><strong>先完成一只股票的流程，再扩展时间跨度或研究更多股票。</strong> 系统没有全A自动选股、自动全池寻优或自动交易功能。</p>
 <h2 id="chapter-02">02 · 安装、启动、停止与更新</h2>
 <h3 id="section-1">2.1 完整部署包中有什么</h3>
@@ -48,8 +48,9 @@ code{font-family:"Noto Sans Mono CJK SC",Consolas,monospace;font-size:.88em;back
 <ol><li>先正常停止旧服务。</li><li>备份 <code>.local-data</code> 和自己采集、导出的文件。</li><li>将新包中的项目文件覆盖到原目录，包含新增文件。</li><li>保留原来的 <code>.local-data</code>、<code>collector/.venv</code>，以及自有 <code>collector/store</code> 数据。</li><li>再运行 <code>start-local.cmd</code>，浏览器刷新；界面仍旧时可按 <code>Ctrl+F5</code>。</li></ol>
 <p>不要只覆盖 <code>scripts/local-server.mjs</code> 就认为新增功能全部升级了。自动微调需要新的页面、计算模块和相关脚本。</p>
 <p>如果引擎、采集代码或Python/SDK版本发生变化，旧采集断点可能被禁止继续使用。按照错误提示新建任务，不手动改哈希或原始响应。已保存的报告不会因为更新自动删除；是否能复现取决于快照和原引擎版本是否仍一致。</p>
-<p>日历与计时修复对已审查的两个前版提供兼容恢复：查询身份、原始价格口径和回测引擎保持一致；日历断点先验证完整性，不完整的旧响应隔离保存后重新查询。其他未知版本仍拒绝混用。原用途、参数和已累计时间保留，修复不完整日历后重新推导预热起点；错误日期范围的旧查询不会作为正确范围的行情复用。新任务默认“仅采集行情”。升级前没有记录的耗时无法补测，任务会明确显示“升级前耗时未记录”。</p>
+<p>日历与计时修复及本次回测入口升级对已审查的前版提供采集兼容恢复：采集查询身份和原始价格口径保持一致；日历断点先验证完整性，不完整的旧响应隔离保存后重新查询。其他未知版本仍拒绝混用。原用途、参数和已累计时间保留，修复不完整日历后重新推导预热起点；错误日期范围的旧查询不会作为正确范围的行情复用。新任务默认“仅采集行情”。升级前没有记录的耗时无法补测，任务会明确显示“升级前耗时未记录”。</p>
 <h2 id="chapter-03">03 · 五个页面与两种运行环境</h2>
+<p>本次新增单标的回测后，旧“仅采集行情”任务不因策略引擎变化而被阻止恢复，仍检查请求、采集版本、断点和快照。旧沪深300正式回测报告保持原引擎约束，不能把新引擎计算称为原报告的复现。已有数据可直接载入新回测，无需再次下载。</p>
 <h3 id="section-7">3.1 左侧导航</h3>
 <div class="table-scroll"><table><thead><tr><th scope="col">页面</th><th scope="col">主要操作</th></tr></thead><tbody><tr><td>策略回测</td><td>选择行情、日期、周期、策略、仓位、资金和费用；运行回测；查看净值、成交、风险与时序</td></tr><tr><td>策略优化</td><td>自动微调参数、比较五种仓位方案、查看训练/验证、应用候选及导出优化报告</td></tr><tr><td>行情数据</td><td>上传数据、提交采集任务、看完整性、看数据源就绪状态、查看持久行情仓库</td></tr><tr><td>本机回测记录</td><td>查看当前浏览器最近20次回测摘要，载入以前的参数</td></tr><tr><td>回测规则</td><td>阅读成交、T+1、ST、公司行动、统计口径和资料边界</td></tr></tbody></table></div>
 <h3 id="section-8">3.2 本地版与托管网站</h3>
@@ -79,8 +80,8 @@ collector/.venv/bin/python -m pip install -r collector/requirements.txt</code></
 <p>进入“行情数据”，找到“单股数据采集与回测”：</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">项目</th><th scope="col">示例填写</th></tr></thead><tbody><tr><td>证券代码</td><td><code>600519</code>，这里填六位代码</td></tr><tr><td>任务用途</td><td>只要下载数据选“仅采集行情”；需要完整回测选“沪深300正式研究”</td></tr><tr><td>研究区间</td><td>完整一年</td></tr><tr><td>研究结束日</td><td><code>2026-09-30</code></td></tr><tr><td>自动研究开始日</td><td><code>2025-10-01</code></td></tr><tr><td>执行周期</td><td>5分钟或15分钟</td></tr></tbody></table></div>
 <p>仅采集时点击“采集行情”，正式研究时点击“采集并验收”。开始日期前会额外采集至少60个交易日预热，指标更长时会增加。预热行情只计算指标，不计入研究期成交和收益。</p>
-<p><strong>仅采集行情</strong>：不查询历史沪深300名单，不判断成员资格，也不运行策略回测。保存原生5分钟、独立日线、日历、历史ST/停牌、因子和公司行动；校验仍会提示缺口或异常。资料不完整时也保留原始行情和问题报告，不能把“采集完成”理解为“正式回测准入通过”。点击“下载行情”取得JSON快照；Parquet归档位于本地研究仓库的 <code>market/parquet</code>。执行周期控件在该模式下禁用，采集始终为原生5分钟。</p>
-<p><strong>沪深300正式研究</strong>：额外核验历史成员资格，完整性通过后运行策略回测、独立重跑和账务核对。仅采集的数据没有历史成员证据，不能直接用于沪深300正式回测；仍可载入查看，或明确使用探索模式。需要正式研究时新建相应用途的任务。</p>
+<p><strong>仅采集行情</strong>：不查询历史沪深300名单，不判断成员资格，也不运行策略回测。保存原生5分钟、独立日线、日历、历史ST/停牌、因子和公司行动；校验仍会提示缺口或异常。资料不完整时也保留原始行情和问题报告，不能把“采集完成”理解为“正式回测准入通过”。完成后点击“载入并回测”，自动使用单标的准入、原研究日期、原任务资金费用和15分钟执行；也可以在回测页输入代码及其他日期，或选择已采集快照。点击“下载行情”取得JSON快照；Parquet归档位于本地研究仓库的 <code>market/parquet</code>。执行周期控件在该模式下禁用，采集始终为原生5分钟。</p>
+<p><strong>沪深300正式研究</strong>：额外核验历史成员资格，完整性通过后运行策略回测、独立重跑和账务核对。仅采集的数据没有历史成员证据，不能直接用于沪深300成员研究；可以用于通过完整行情校验的“单标的回测”，此模式保留ST、停牌、交易日历、分钟网格、独立日线和公司行动校验，只是不要求指数成员。需要沪深300成员研究时新建相应用途的任务。</p>
 <h3 id="section-13">4.4 自定义区间</h3>
 <p>将“研究区间”改为“自定义起止日期”，开始和结束都可以编辑，例如 <code>2026-01-01</code> 至 <code>2026-09-30</code>，或跨度更长的历史区间。</p>
 <p>开始日必须早于结束日；结束日必须早于北京时间今天。所填日期可以不是交易日，实际回测点以该区间内可用的真实交易日为准。供应商历史覆盖或必要资料不足时会受阻，不会自动缩短区间凑一个成功结果。</p>
@@ -118,16 +119,23 @@ collector/.venv/bin/python -m pip install -r collector/requirements.txt</code></
 <p>展开日志可查看阶段累计、每次运行的开始/结束、按查询类型的累计耗时、限流等待及SDK请求数。每项完成或失败的查询记录毫秒耗时；缓存读回及哈希校验也记时。强制终止的在途查询没有完成回执时，其耗时只计入阶段累计，不能据此得出精确的接口等待拆分。查询类型表的SDK请求数包含分页，不包括表外的登录/退出等调用。</p>
 <p>点击“下载耗时日志”保存全部本次升级以来的日志与计时JSON。耗时单独保存，不加入行情快照或确定性回测结果的哈希；因此两次复现耗时不同，不会造成假复现失败。页面仅显示最近日志，完整记录以下载文件为准。对应本地文件在 <code>.local-data/research/jobs/任务ID/state.json</code> 和 <code>events.jsonl</code>，使用自定义数据目录时前缀不同。</p>
 <p>一年分钟线采集慢时，先看哪类查询耗时最高：正式研究当前逐交易日查询300只成员名单，这不是单只股票分钟线本身；只下载行情请选“仅采集行情”。其余耗时可能来自网络、分页、受控限流或本地校验，应以计时日志判断，不直接取消流量保护。</p>
-<h3 id="section-22">5.5 已有任务的三个操作</h3>
-<ul><li>“下载完整报告”：取得后台保存的完整JSON报告。</li><li>“固定快照复现”：复用原快照和参数新建复现任务，不再次拉取行情；原引擎版本必须一致。</li><li>“载入并优化”：载入该任务的固定快照、原研究日期、资金和费用，然后进入“策略优化”。这是继续分析已有数据的推荐入口。</li></ul>
-<p>“载入行情”只载入行情，页面可能重新推算可研究日期，并保留当前策略配置。若要严格沿用原任务的区间和资金费用，优先用“载入并优化”。</p>
+<h3 id="section-22">5.5 已有任务的操作</h3>
+<ul><li>“载入并回测”：读取该任务的固定快照，恢复原研究日期、策略、资金和费用，进入回测页并运行。仅采集任务默认15分钟执行，可自行再切换5分钟或日线；不查询成员名单，不重新拉取行情。</li><li>“查看行情”：只载入该快照以查看价格、完整性和资料问题，不自动运行回测。</li><li>“下载行情”：下载固定JSON数据包，可导入其他本地实例。</li><li>“下载完整报告”：取得后台保存的报告。仅采集报告没有策略收益；网页回测结果需另点“导出回测报告”。</li><li>“固定快照复现”或“固定快照校验”：复用原快照和参数，前者要求原策略引擎一致；后者只校验行情，不运行策略。</li><li>“载入并优化”：沪深300正式研究任务提供此入口，恢复任务配置后进入策略优化。仅采集快照先载入回测，再从导航进入优化即可。</li></ul>
+<p>卡片有快照不代表数据一定达标。点击“载入并回测”后，如存在分钟缺口、未知历史ST或不完整公司行动，会在回测配置下显示拒绝原因，不把旧结果当作新结果。</p>
 <h2 id="chapter-06">06 · 手动回测：从选数据到看结果</h2>
-<h3 id="section-23">6.1 选择当前行情</h3>
-<p>进入“策略回测”，检查“行情标的”和页面来源提示。若仍是“演示标的 · 合成5分钟”，当前不是你刚采集的真实股票。</p>
-<p>真实行情可以来自任务的“载入行情/载入并优化”、持久行情仓库的“载入/查看缺口”，或者手工导入完整JSON数据包。</p>
-<p><strong>换行情或参数后，旧图表可能仍保留。</strong> 看到“参数已更改”时，应重新点击“运行回测”，然后核对结果标的、周期和日期。不要把上一次的图表或导出报告当成新配置结果。</p>
+<h3 id="section-23">6.1 自定义代码、日期与选择已采集行情</h3>
+<p>进入“策略回测”，可直接填写“证券代码”“回测开始日期”“回测结束日期”。代码与起止日期均可修改，不固定证券，也不固定一年；研究仍是一只股票一次回测。</p>
+<p><strong>方式A：按代码和区间回测。</strong></p>
+<ol><li>在“证券代码”输入六位代码，例如 <code>001389</code> 或 <code>600519</code>。</li><li>填入本次回测开始、结束日期，例如 <code>2026-01-05</code> 至 <code>2026-06-30</code>；也可研究几个月或跨年区间。</li><li>可先点“按代码与日期载入”检查数据，也可直接点“运行回测”。系统在本机仓库匹配该证券、且覆盖所选起止日期的快照，多个覆盖快照默认选最近入库的一个；已经明确载入且覆盖区间的快照优先沿用。</li><li>通过该入口载入时，保留你填写的日期、策略、执行周期、资金和费用，不用原任务的日期覆盖你的自定义区间。</li><li>找不到足够覆盖时会停止并提示“没有覆盖…的本地行情快照”。点击“采集此代码与区间”，会把代码和自定义日期填入行情采集表单；确认后点“采集行情”。不会在输入代码时悄悄启动网络任务。</li><li>采集完成后可点任务的“载入并回测”；想研究其中更短区间，回到回测页修改日期再运行。</li></ol>
+<p><strong>方式B：选择指定的历史快照。</strong></p>
+<p>在“已采集行情快照”下拉框选择证券、覆盖结束日期和短编号。点击“刷新已采集行情”重新读取本机持久仓库；重新打开页面也能看到快照。完整证券名称、原生周期、根数、研究日期和快照编号在下方显示。</p>
+<p>选择快照会初始化为数据包内的原研究区间，采集数据含有的预热日不自动计入收益；策略和资金费用保持页面当前配置。之后可自由修改起止日期。想回测某一特定版本的行情，应先选择对应快照，再填区间。</p>
+<p><strong>方式C：从采集任务或行情仓库进入。</strong></p>
+<p>“行情数据”中，任务卡片和持久仓库都有“载入并回测”。任务按钮沿用原任务策略、日期、资金和费用；仓库按钮沿用页面当前策略和费用。两者都进入回测页并真正运行，不只是预览K线。</p>
+<p><strong>数据准入范围</strong>：仅采集快照自动选择“单标的回测 · 完整行情校验”，保留分钟完整性、历史ST/停牌、独立日线、交易日历、因子和公司行动核验，不要求沪深300成员资格。“沪深300研究 · 含成员校验”另外要求历史名单，名单缺失会拒绝；普通CSV依旧只能选择“CSV探索”。单标的模式的报告明确记录 <code>scope=single-security</code>、<code>membershipChecked=false</code>，不会把未核验证券写成合格指数成员。</p>
+<p><strong>换代码、行情或参数后，旧图表仍可能保留。</strong> 页面会显示“待重新回测”的旧结果提示，报告与成交导出暂时禁用。重新运行成功后，结果标题显示实际证券、策略和周期，导出恢复；失败时保留拒绝原因，不生成看似成功的新报告。</p>
 <h3 id="section-24">6.2 日期与执行周期</h3>
-<p>在“策略回测”配置开始和结束日期；这里的日期决定本次手动回测区间，不会重写原后台任务。</p>
+<p>在“策略回测”自由配置开始和结束日期；这里的日期决定本次手动回测区间，不会重写原后台任务。日期必须落在已校验行情覆盖内，且开始日前有足够指标预热；超出时会提示补充采集，不悄悄截短你的区间。</p>
 <div class="table-scroll"><table><thead><tr><th scope="col">周期</th><th scope="col">适用操作</th><th scope="col">资料与边界</th></tr></thead><tbody><tr><td>日线</td><td>研究大波段、趋势底仓、分批加仓</td><td>已完成日线产生信号，下一交易日开盘估算成交；不模拟盘中T</td></tr><tr><td>15分钟</td><td>大波段执行与盘中T方案对照</td><td>适合先做常规研究；5分钟原始数据可以完整聚合</td></tr><tr><td>5分钟</td><td>更细的入场、离场、T及回撤研究</td><td>更多计算量；仍是K线级估算，不是逐笔撮合</td></tr></tbody></table></div>
 <p>同一份完整5分钟数据可以聚合到15分钟或完整日线。15分钟不能拆出真实5分钟，日线也不能生成真实分钟。缺少分钟网格时不会补成一条“完整日线”。</p>
 <p>自动采集任务目前仅提供5/15分钟执行选项。想做纯日线，可以先取得并载入完整数据包，在“策略回测 → 执行与回测周期”选择“日线”。这条操作不会变成只采日线的后台任务。</p>
@@ -227,7 +235,7 @@ collector/.venv/bin/python -m pip install -r collector/requirements.txt</code></
 <h2 id="chapter-14">14 · 导入已有数据与持久仓库</h2>
 <h3 id="section-41">14.1 完整JSON数据包</h3>
 <p>在“行情数据”点“选择数据文件”，选择符合系统模板的JSON。导入后看“当前数据校验”，确认证券、板块、请求覆盖、实际覆盖、完整交易日、历史资料与问题列表。</p>
-<p>正式研究需要原始行情和独立日历、日线、历史ST、成分、因子、公司行动等证据。模板下载是合成结构示例，不是可以直接用于盈利验证的真实行情。</p>
+<p>单标的回测需要原始行情和独立日历、日线、历史ST/停牌、因子、公司行动等证据。沪深300研究另外需要历史成分证据。模板下载是合成结构示例，不是可以直接用于盈利验证的真实行情。</p>
 <p>上传文件上限25MB。超过时会拒绝；目前没有通用的大文件分片导入界面。自动后台采集可以产生并管理自己的快照，不能把这一点等同于上传界面无上限。</p>
 <h3 id="section-42">14.2 CSV探索</h3>
 <p>CSV适合快速看某个策略在一段K线上的行为，无法仅靠价格列证明历史ST、成分、除权、停牌或整日完整性。</p>
@@ -236,7 +244,7 @@ collector/.venv/bin/python -m pip install -r collector/requirements.txt</code></
 <p>不要混用日线与分钟时间戳，不要凭成交量猜停牌。详情和样例以“下载CSV模板”及采集器说明为准。</p>
 <h3 id="section-43">14.3 行情仓库</h3>
 <p>导入的JSON和后台快照保存到持久仓库。列表可查看证券、来源、周期、实际覆盖、资料问题、入库时间和SHA-256标识；有下一页时继续翻页。</p>
-<p>“载入/查看缺口”会把该快照作为当前行情。“下载快照”可保存完整文件。换浏览器后可以重新从同一本地仓库载入；不依赖浏览器的回测摘要存储。</p>
+<p>“载入/查看缺口”会把该快照作为当前行情。“载入并回测”进入回测页并执行；“下载快照”可保存完整文件。回测页也可直接从“已采集行情快照”选择，无需先下载再上传。换浏览器后可以重新从同一本地仓库载入；不依赖浏览器的回测摘要存储。</p>
 <h2 id="chapter-15">15 · 数据源、密钥与同步</h2>
 <h3 id="section-44">15.1 就绪状态不等于采集完成</h3>
 <p>在“行情数据 → 数据源就绪情况”点击“检查就绪情况”。该检查不发行情请求，不自动消耗付费额度。</p>
@@ -276,7 +284,7 @@ node scripts/local-server.mjs</code></pre>
 <p>备份前正常停止服务，复制整个 <code>.local-data</code>，手工数据另复制 <code>collector/store</code>，自定义 <code>--data-dir</code> 也要备份。浏览器摘要不能代替完整报告。</p>
 <p>换电脑时用同版本源码与构建文件恢复数据，重新建立Python虚拟环境并安装依赖。不要把 <code>.venv</code> 直接复制到新路径或另一台电脑并假定仍能正常使用。解释器/SDK变化也可能影响原采集断点，应遵循版本核对提示。</p>
 <h2 id="chapter-18">18 · 常见问题与排查顺序</h2>
-<div class="table-scroll"><table><thead><tr><th scope="col">现象或错误</th><th scope="col">优先检查/处理</th></tr></thead><tbody><tr><td>双击启动提示找不到Node</td><td>安装Node.js 22以上，推荐24；重开启动脚本</td></tr><tr><td>缺少构建文件</td><td>是否完整解压、是否在正确项目目录、有无 <code>dist/server/index.js</code>；源码包才需要安装并构建</td></tr><tr><td>文件存在仍加载失败</td><td>看新版启动窗口的实际加载原因；确认完整更新、Node版本及文件是否损坏</td></tr><tr><td>端口已占用</td><td>停止另一实例，或用 <code>--port 8081</code> 并访问对应地址</td></tr><tr><td>提示已有本地任务服务</td><td>同一数据目录已有调度器；正常停止旧服务，不要绕过锁并发启动</td></tr><tr><td>自动任务入口不可用</td><td>是否打开托管网站或直接HTML；应访问本机HTTP服务</td></tr><tr><td><code>PYTHON_MISSING</code></td><td>安装Python/虚拟环境；确认 <code>collector/.venv</code> 解释器或设置正确的 <code>ASHARE_PYTHON</code></td></tr><tr><td>缺少Python依赖</td><td>用采集虚拟环境的Python安装 <code>collector/requirements.txt</code>，重启服务</td></tr><tr><td><code>NETWORK_TCP_NOT_GRANTED</code></td><td>当前执行环境限制BaoStock官方TCP；不是要网站授权或API Key；在可连接官方SDK的本机运行</td></tr><tr><td>SDK登录/连接超时</td><td>看官方服务和主机TCP网络条件；不要靠重复并发查询解决</td></tr><tr><td><code>CALENDAR_INCOMPLETE</code>/<code>CALENDAR_INVALID</code> 或2025年任务在拉2007年分钟线</td><td>日历缺失、乱序或异常预热起点；暂停并升级修复包，恢复后先校验完整自然日日历，坏断点保留证据并重查</td></tr><tr><td><code>PROVIDER_RESPONSE_INCOMPLETE</code></td><td>SDK分页收到空响应；本项未确认完整，保留其他断点，检查网络后恢复，不绕过限流</td></tr><tr><td><code>PARQUET_ARCHIVE</code> 与 <code>[Errno 9] Bad file descriptor</code></td><td>旧版在Windows用只读句柄刷盘，升级完整修复包，保留 <code>.local-data</code> 与 <code>collector/.venv</code> 后重启并恢复；不删除已拉行情或重装依赖。新错误报告包含表/路径和本地调用栈，便于判断是否还有其他原因</td></tr><tr><td>达到日预算/黑名单</td><td>停止并保留断点，按日志处理，必要时翌日恢复；不改IP、不重置计数</td></tr><tr><td><code>DATA_ADMISSION</code></td><td>展开资料问题，补原生分钟、历史ST、日历、成员、公司行动或独立日线，不把未知填成“否”</td></tr><tr><td><code>WARMUP_CALENDAR</code> 或预热不足</td><td>检查上市历史和交易日历；补足更早历史或使用有依据的指标周期</td></tr><tr><td><code>UNIVERSE_HISTORY</code>/历史成员不足</td><td>检查所选时期成分证据；今天名单不能代替</td></tr><tr><td><code>ENGINE_CHANGED</code>/<code>PIPELINE_CHANGED</code>/<code>COLLECTOR_RUNTIME_CHANGED</code></td><td>引擎、采集或运行版本变化，原断点不能静默混用；保留旧报告，新建任务或恢复原版本</td></tr><tr><td>快照/报告/检查点哈希不符</td><td>停止；保留文件并对照备份排查，不手工改哈希掩盖问题</td></tr><tr><td>没有成交</td><td>逐项看趋势、突破、资格、停牌限价、冷却与预热；不要求每天有买卖</td></tr><tr><td>所有候选都未达标</td><td>看样本和风险；增加独立历史覆盖或重新检验策略假设，不能把排行第一当作达标</td></tr><tr><td>部分候选无法计算</td><td>看具体错误；可能较长指标预热不足或参数组合不合法</td></tr><tr><td>找不到自动微调入口</td><td>更新完整包、重启并 <code>Ctrl+F5</code>；左侧应出现“策略优化”</td></tr><tr><td>下载报告还是上一轮</td><td>新回测/优化未完成或失败时旧结果可能保留，先核对来源、日期和状态</td></tr><tr><td>优化关闭网页后没继续</td><td>优化是浏览器线程，需保持页面；后台采集才支持保存断点与恢复</td></tr><tr><td>理杏仁仍说缺Key</td><td>网站配置不会自动传给本地；检查本地环境变量与启动窗口继承关系</td></tr><tr><td>日线模式T没有交易</td><td>纯日线不模拟盘中T，切换真实5/15分钟研究</td></tr><tr><td>趋势加仓没有买满</td><td>现金、风险、已知保护位、资格、限价和间隔都可能缩减或阻止加仓</td></tr><tr><td>做T赚了但组合更差</td><td>T净价差不代表组合增益，比较完整验证净值、回撤、费用和库存</td></tr></tbody></table></div>
+<div class="table-scroll"><table><thead><tr><th scope="col">现象或错误</th><th scope="col">优先检查/处理</th></tr></thead><tbody><tr><td>双击启动提示找不到Node</td><td>安装Node.js 22以上，推荐24；重开启动脚本</td></tr><tr><td>缺少构建文件</td><td>是否完整解压、是否在正确项目目录、有无 <code>dist/server/index.js</code>；源码包才需要安装并构建</td></tr><tr><td>文件存在仍加载失败</td><td>看新版启动窗口的实际加载原因；确认完整更新、Node版本及文件是否损坏</td></tr><tr><td>端口已占用</td><td>停止另一实例，或用 <code>--port 8081</code> 并访问对应地址</td></tr><tr><td>提示已有本地任务服务</td><td>同一数据目录已有调度器；正常停止旧服务，不要绕过锁并发启动</td></tr><tr><td>自动任务入口不可用</td><td>是否打开托管网站或直接HTML；应访问本机HTTP服务</td></tr><tr><td><code>PYTHON_MISSING</code></td><td>安装Python/虚拟环境；确认 <code>collector/.venv</code> 解释器或设置正确的 <code>ASHARE_PYTHON</code></td></tr><tr><td>缺少Python依赖</td><td>用采集虚拟环境的Python安装 <code>collector/requirements.txt</code>，重启服务</td></tr><tr><td><code>NETWORK_TCP_NOT_GRANTED</code></td><td>当前执行环境限制BaoStock官方TCP；不是要网站授权或API Key；在可连接官方SDK的本机运行</td></tr><tr><td>SDK登录/连接超时</td><td>看官方服务和主机TCP网络条件；不要靠重复并发查询解决</td></tr><tr><td><code>CALENDAR_INCOMPLETE</code>/<code>CALENDAR_INVALID</code> 或2025年任务在拉2007年分钟线</td><td>日历缺失、乱序或异常预热起点；暂停并升级修复包，恢复后先校验完整自然日日历，坏断点保留证据并重查</td></tr><tr><td><code>PROVIDER_RESPONSE_INCOMPLETE</code></td><td>SDK分页收到空响应；本项未确认完整，保留其他断点，检查网络后恢复，不绕过限流</td></tr><tr><td><code>PARQUET_ARCHIVE</code> 与 <code>[Errno 9] Bad file descriptor</code></td><td>旧版在Windows用只读句柄刷盘，升级完整修复包，保留 <code>.local-data</code> 与 <code>collector/.venv</code> 后重启并恢复；不删除已拉行情或重装依赖。新错误报告包含表/路径和本地调用栈，便于判断是否还有其他原因</td></tr><tr><td>达到日预算/黑名单</td><td>停止并保留断点，按日志处理，必要时翌日恢复；不改IP、不重置计数</td></tr><tr><td><code>DATA_ADMISSION</code></td><td>展开资料问题，补原生分钟、历史ST、日历、成员、公司行动或独立日线，不把未知填成“否”</td></tr><tr><td><code>WARMUP_CALENDAR</code> 或预热不足</td><td>检查上市历史和交易日历；补足更早历史或使用有依据的指标周期</td></tr><tr><td><code>UNIVERSE_HISTORY</code>/历史成员不足</td><td>检查所选时期成分证据；今天名单不能代替</td></tr><tr><td><code>ENGINE_CHANGED</code>/<code>PIPELINE_CHANGED</code>/<code>COLLECTOR_RUNTIME_CHANGED</code></td><td>引擎、采集或运行版本变化，原断点不能静默混用；保留旧报告，新建任务或恢复原版本</td></tr><tr><td>快照/报告/检查点哈希不符</td><td>停止；保留文件并对照备份排查，不手工改哈希掩盖问题</td></tr><tr><td>找不到刚采集的数据</td><td>回测页点“刷新已采集行情”，核对使用同一个本地数据目录；也可从任务点“载入并回测”</td></tr><tr><td>代码或日期改了仍看到旧图</td><td>看“待重新回测”提示，点击“运行回测”；成功前不能导出旧结果冒充新结果</td></tr><tr><td>没有覆盖所选区间的快照</td><td>核对六位代码和日期；点击“采集此代码与区间”，先采集缺少范围及足够预热</td></tr><tr><td>没有成交</td><td>逐项看趋势、突破、资格、停牌限价、冷却与预热；不要求每天有买卖</td></tr><tr><td>所有候选都未达标</td><td>看样本和风险；增加独立历史覆盖或重新检验策略假设，不能把排行第一当作达标</td></tr><tr><td>部分候选无法计算</td><td>看具体错误；可能较长指标预热不足或参数组合不合法</td></tr><tr><td>找不到自动微调入口</td><td>更新完整包、重启并 <code>Ctrl+F5</code>；左侧应出现“策略优化”</td></tr><tr><td>下载报告还是上一轮</td><td>新回测/优化未完成或失败时旧结果可能保留，先核对来源、日期和状态</td></tr><tr><td>优化关闭网页后没继续</td><td>优化是浏览器线程，需保持页面；后台采集才支持保存断点与恢复</td></tr><tr><td>理杏仁仍说缺Key</td><td>网站配置不会自动传给本地；检查本地环境变量与启动窗口继承关系</td></tr><tr><td>日线模式T没有交易</td><td>纯日线不模拟盘中T，切换真实5/15分钟研究</td></tr><tr><td>趋势加仓没有买满</td><td>现金、风险、已知保护位、资格、限价和间隔都可能缩减或阻止加仓</td></tr><tr><td>做T赚了但组合更差</td><td>T净价差不代表组合增益，比较完整验证净值、回撤、费用和库存</td></tr></tbody></table></div>
 <p>遇到问题时保留：完整启动提示、任务ID、状态、错误码、研究日期、配置及报告。分享排查资料前去除Key等凭据；不需要提供交易账户资料。</p>
 <h2 id="chapter-19">19 · 一次可复查研究的操作清单</h2>
 <p>开始前：</p>

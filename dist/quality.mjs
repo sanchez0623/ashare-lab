@@ -1,7 +1,8 @@
 import {slots,dayOf,detectTimeframe} from './data.mjs';
 import {boardNames} from './rules.mjs';
 const validDate=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s;
-export function auditBundle(b){
+export function auditBundle(b,{scope='hs300'}={}){
+  if(!['hs300','single-security'].includes(scope))throw Error('数据校验范围无效。');
   const issues=[],add=(code,message,count=1,samples=[])=>issues.push({code,message,count,samples:samples.slice(0,15)});
   if(!b||b.schemaVersion!==1||!Array.isArray(b.bars))throw Error('需要 schemaVersion=1 的完整数据包。');
   const bars=b.bars,m=b.metadata??{},range=m.requested??{},daily=b.daily??[],calendar=b.calendar??[],actions=b.actions??[];
@@ -49,12 +50,14 @@ export function auditBundle(b){
   const calendarSet=new Set(calendar);const extras=[...byDay.keys()].filter(d=>d>=range.from&&d<=range.to&&!calendarSet.has(d));if(extras.length)add('NON_SESSION','非交易日出现行情',extras.length,extras);
   if(m.providerDuplicates?.length)add('PROVIDER_DUPLICATES','采集源返回重复时间，需核实并重新采集',m.providerDuplicates.length,m.providerDuplicates);
   if(m.conflicts?.length)add('SOURCE_CONFLICT','增量重叠区间存在未裁决的数据修订',m.conflicts.length,m.conflicts.map(x=>x.date??x));
+  if(scope==='hs300'){
   const universe=b.universe??[],um=new Map(universe.map(x=>[x.date,x]));
   if(m.universe!=='HS300')add('UNIVERSE_SCOPE','正式研究限定历史沪深300股票池');
   const uc=m.coverage?.universe;if(!uc||uc.status!=='complete'||!validDate(uc.from)||!validDate(uc.to)||uc.from>range.from||uc.to<range.to||!uc.source)add('UNIVERSE_COVERAGE','缺少按查询日期留存的沪深300成分覆盖');
   const universeGaps=[];for(const day of sessions){const u=um.get(day);if(!u||!validDate(u.updateDate)||u.updateDate>day||!u.knownAt||u.knownAt>day+' 15:00'||!Array.isArray(u.codes)||u.codes.length!==300||new Set(u.codes).size!==300)universeGaps.push(day);}
   if(universeGaps.length)add('UNIVERSE_HISTORY','成分股快照缺失、非300只或含未来更新',universeGaps.length,universeGaps);
   if(um.size!==universe.length)add('UNIVERSE_DUPLICATES','成分股查询日期重复');
+  }
   const actionIds=new Set();
   for(const a of actions){
     if(actionIds.has(a.id)||!a.id){add('ACTION_ID','公司行动缺少唯一编号');continue;}actionIds.add(a.id);
@@ -77,10 +80,10 @@ export function auditBundle(b){
     }if(d.halted!==1)prev=d;
   }
   const failed=issues.reduce((s,i)=>s+i.count,0);
-  return {version:'3.0',status:failed?'blocked':'passed',label:failed?'不可正式回测':m.synthetic?'合成数据包 · 结构校验通过':'结构与覆盖校验通过',issues,requested:range,actual:{from:bars[0]?.date??null,to:bars.at(-1)?.date??null,bars:bars.length},sessions:sessions.length,completeSessions,suspendedSessions,warning:'校验只证明所声明数据源内的结构与覆盖；不能证明供应商从未漏报、历史可得性或股票池无幸存者偏差。'};
+  return {version:'3.1',scope,membershipChecked:scope==='hs300',status:failed?'blocked':'passed',label:failed?(scope==='single-security'?'不可单标的回测':'不可正式回测'):m.synthetic?'合成数据包 · 结构校验通过':scope==='single-security'?'单标的数据校验通过 · 未核验沪深300成员':'结构与覆盖校验通过',issues,requested:range,actual:{from:bars[0]?.date??null,to:bars.at(-1)?.date??null,bars:bars.length},sessions:sessions.length,completeSessions,suspendedSessions,warning:'校验只证明所声明数据源内的结构与覆盖；不能证明供应商从未漏报、历史可得性或股票池无幸存者偏差。'+(scope==='single-security'?' 当前仅研究指定证券，不要求也不证明历史沪深300成员资格。':'')};
 }
-export function prepareBundle(b,{strict=true}={}){
-  const report=auditBundle(b);if(strict&&report.status!=='passed')throw Error('数据准入失败：'+report.issues.slice(0,4).map(x=>x.message+'（'+x.count+'）').join('；'));
+export function prepareBundle(b,{strict=true,scope='hs300'}={}){
+  const report=auditBundle(b,{scope});if(strict&&report.status!=='passed')throw Error('数据准入失败：'+report.issues.slice(0,4).map(x=>x.message+'（'+x.count+'）').join('；'));
   const dm=new Map((b.daily??[]).map(d=>[d.date,d])),um=new Map((b.universe??[]).map(u=>[u.date,u]));
   const code=(b.metadata.symbol?.startsWith('6')?'sh.':'sz.')+b.metadata.symbol;
   const listingCalendar=b.calendar??[],listingSessions=new Map();let age=b.metadata.listingSessionOffset??0;for(const d of listingCalendar)if(d>=b.metadata.listedDate)listingSessions.set(d,++age);

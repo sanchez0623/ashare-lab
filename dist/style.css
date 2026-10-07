@@ -27,3 +27,7 @@ body{font-size:1rem}.config-content label,.section-label{font-size:.875rem}.two-
 @media(max-width:760px){.layout input,.layout select{font-size:1rem}.sidebar .nav{gap:0}}
 @media(max-width:560px){.research-form{grid-template-columns:minmax(0,1fr)}.research-form button{grid-column:auto;width:100%}}
 @media(max-width:380px){.config-content>.two-fields,.strategy-params.two-fields,.strategy-params>.two-fields{grid-template-columns:minmax(0,1fr)}}
+
+.backtest-data-actions{display:flex;flex-wrap:wrap;gap:8px 14px;grid-column:1/-1}.backtest-data-actions button{white-space:normal;text-align:left}#backtest-data-summary{white-space:pre-line;overflow-wrap:anywhere}#result-stale{margin:0 0 12px}.result-head>div{min-width:0;flex-wrap:wrap}#result-title{overflow-wrap:anywhere}
+
+.dataset-field{grid-column:1/-1}

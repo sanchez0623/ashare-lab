@@ -57,6 +57,16 @@ test('job timing and query diagnostics persist over pause/restart and stay separ
   const report=JSON.parse(await m.report(done));assert.equal(report.timing,undefined);assert.equal(report.result,undefined);
  }finally{await m.close();await rm(dir,{recursive:true,force:true});}
 });
+test('collection snapshots and reviewed checkpoints survive an engine-only upgrade; formal reports remain pinned',async()=>{
+ const b=dataset(),ctx=await setup(async()=>b),currentEngine=ctx.manager.fingerprint;
+ try{
+  ctx.manager.fingerprint=hash('previous strategy engine');ctx.manager.pipelineFingerprint='42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9';
+  const j=await ctx.manager.create({...input(b),purpose:'collect'}),done=await until(ctx.manager,j.id);assert.equal(done.status,'completed',JSON.stringify(done.error));assert.equal(done.engineHash,ctx.manager.fingerprint);assert.equal(done.pipelineMigrations.length,1);
+  ctx.manager.fingerprint=currentEngine;const replay=await ctx.manager.repeat(done.id),again=await until(ctx.manager,replay.id);assert.equal(again.reportHash,done.reportHash);
+  ctx.manager.fingerprint=hash('previous strategy engine');
+  const formal=await ctx.manager.create(input(b)),blocked=await until(ctx.manager,formal.id);assert.equal(blocked.error.code,'ENGINE_CHANGED');assert.equal(blocked.snapshotId,undefined);
+ }finally{await ctx.manager.close();await rm(ctx.dir,{recursive:true,force:true});}
+});
 test('only the reviewed legacy pipeline can migrate and reuse original research checkpoints',async()=>{
  const b=dataset(),ctx=await setup(async()=>b);
  try{

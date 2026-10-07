@@ -48,7 +48,7 @@ function dailyIndicators(days,c) {
 }
 export function validate(c) {
   for(const[k,v]of Object.entries(defaults))if(typeof v==='number'&&!Number.isFinite(c[k]))throw Error('参数必须是有效数字。');
-  if(!['demo','formal','exploration'].includes(c.dataMode))throw Error('数据准入模式无效。');
+  if(!['demo','formal','single','exploration'].includes(c.dataMode))throw Error('数据准入模式无效。');
   if(!['main','chinext','star','bse'].includes(c.board))throw Error('板块无效。');
   if(!['historical','manual'].includes(c.rulesMode)||!['historical','manual'].includes(c.taxMode))throw Error('规则或税费模式无效。');
   if(c.taxMode==='historical'&&c.from<'2015-08-01')throw Error('自动税费表覆盖2015-08-01起；更早区间需提供经核实的手工费率并分段研究。');
@@ -75,8 +75,8 @@ export function validate(c) {
 export function backtest(input,config={}) {
   const c={...defaults,...config};validate(c);
   let qualityReport=null,actions=[],metadata=null,sessionCalendar=[],dailyMeta=new Map();
-  if(Array.isArray(input)&&c.dataMode==='formal')throw Error('正式研究需要完整数据包，不接受未经独立校验的行情数组。');
-  if(!Array.isArray(input)){const prepared=prepareBundle(input);qualityReport=prepared.report;actions=prepared.actions;metadata=prepared.metadata;sessionCalendar=prepared.calendar;dailyMeta=new Map(prepared.daily.map(d=>[d.date,d]));input=prepared.bars;c.board=metadata.board;c.rulesMode='historical';}
+  if(Array.isArray(input)&&['formal','single'].includes(c.dataMode))throw Error('正式研究或单标的回测需要完整数据包，不接受未经独立校验的行情数组。');
+  if(!Array.isArray(input)){const prepared=prepareBundle(input,{scope:c.dataMode==='single'?'single-security':'hs300'});qualityReport=prepared.report;actions=prepared.actions;metadata=prepared.metadata;sessionCalendar=prepared.calendar;dailyMeta=new Map(prepared.daily.map(d=>[d.date,d]));input=prepared.bars;c.board=metadata.board;c.rulesMode='historical';}
   const native=detectTimeframe(input),data=resampleData(input,c.timeframe);
   if(data.length<2)throw Error('行情不足两根 K 线。');
   for(let i=0;i<data.length;i++){
@@ -103,7 +103,7 @@ export function backtest(input,config={}) {
   const feeTotals={commission:0,stamp:0,handling:0,regulatory:0,transfer:0};
   const ledger=new CorporateLedger(actions),benchmarkLedger=new CorporateLedger(actions);
   let benchmarkQty=Math.floor(c.capital/data[start].open),benchmarkCash=c.capital-benchmarkQty*data[start].open,lastDay=null;
-  const audit={engineVersion:'4.0-inventory-swing-T',inventoryPolicy:'FIFO sell only prior-date purchases; listed bonus shares immediately available; one shared cash book',feePolicy:'five separate per-order fees; fixed user rates by default; no bundled commission',management:c.management,rulesVersion,qualityReport,snapshotId:c.snapshotId??null,board:c.board,stExcluded:0,unknownSTAssumption:!metadata,corporatePolicy:'record-date entitlement; receivable on ex-date; pay/list date release; rights blocked; fractional bonus floored',dividendTax:'gross or provided net per event; no personalized holding-period tax',timingViolations:0,decisions:0,sameBarRangeUsed:false,sameBarVolumeUsed:false,dailyAvailableAfter:'15:00 Asia/Shanghai',breakoutShift:1};
+  const audit={engineVersion:'4.1-single-security-swing-T',inventoryPolicy:'FIFO sell only prior-date purchases; listed bonus shares immediately available; one shared cash book',feePolicy:'five separate per-order fees; fixed user rates by default; no bundled commission',management:c.management,rulesVersion,qualityReport,snapshotId:c.snapshotId??null,board:c.board,stExcluded:0,unknownSTAssumption:!metadata,corporatePolicy:'record-date entitlement; receivable on ex-date; pay/list date release; rights blocked; fractional bonus floored',dividendTax:'gross or provided net per event; no personalized holding-period tax',timingViolations:0,decisions:0,sameBarRangeUsed:false,sameBarVolumeUsed:false,dailyAvailableAfter:'15:00 Asia/Shanghai',breakoutShift:1};
   let feeDay=c.from;
   const fee=(amount,sell)=>orderFees(amount,sell,c,feeDay).total;
   const charge=(amount,sell)=>{const detail=orderFees(amount,sell,c,feeDay);for(const k of Object.keys(feeTotals))feeTotals[k]+=detail[k];fees+=detail.total;return detail;};
@@ -149,14 +149,14 @@ export function backtest(input,config={}) {
       if(c.stop>0&&change<=-c.stop/100)pendingExit=pendingExit||{reason:'前根收盘止损',signalTime:sourceAt,dailySignalTime:c.strategy==='swing'?d?.availableAt:null};
       if(c.take>0&&change>=c.take/100)pendingExit=pendingExit||{reason:'前根收盘止盈',signalTime:sourceAt,dailySignalTime:c.strategy==='swing'?d?.availableAt:null};
     }
-    if(metadata&&r.isHS300!==1&&qty>0)pendingExit=pendingExit||{reason:'历史沪深300成分调出',signalTime:day+' 09:30',dailySignalTime:null};
+    if(metadata&&c.dataMode!=='single'&&r.isHS300!==1&&qty>0)pendingExit=pendingExit||{reason:'历史沪深300成分调出',signalTime:day+' 09:30',dailySignalTime:null};
     if(r.isST===1){if(qty>0)pendingExit=pendingExit||{reason:'历史 ST 状态生效，退出持仓',signalTime:day+' 09:30',dailySignalTime:null};else if(desired)audit.stExcluded++;desired=false;}
     if(pendingExit){desired=false;reason=pendingExit.reason;}
     // Daily price limits use prior SESSION close, never the prior intraday bar close.
     const previousSession=groups[g.index-1];
     const prevPrice=r.prev_close??previousSession?.close??prev.close;
     const {up,down,rule}=knownLimits(r,prevPrice,c);
-    const eligible=r.isST!==1&&(!metadata||r.isHS300===1&&r.membershipFresh===1)&&(c.strategy!=='swing'||Math.abs(r.open/prevPrice-1)<=c.maxGap/100)&&(r.listingSession==null||r.listingSession>20)&&r.specialSession!==1;
+    const eligible=r.isST!==1&&(!metadata||c.dataMode==='single'||r.isHS300===1&&r.membershipFresh===1)&&(c.strategy!=='swing'||Math.abs(r.open/prevPrice-1)<=c.maxGap/100)&&(r.listingSession==null||r.listingSession>20)&&r.specialSession!==1;
     const sell=qty>0&&!desired,buy=qty===0&&!entry&&desired&&eligible;
     // halted, prev_close and limit prices are input contracts: they must be known at this open.
     // Current HIGH / LOW / CLOSE / VOLUME are intentionally absent from execution decisions.
@@ -254,6 +254,7 @@ export function backtest(input,config={}) {
   const maxdd=curve.reduce((m,r)=>Math.min(m,r.drawdown),0),wins=closed.filter(t=>t.pnl>0),losses=closed.filter(t=>t.pnl<0);
   const incomplete=groups.filter(g=>!g.complete).map(g=>g.date);
   const warnings=[];
+  if(metadata&&c.dataMode==='single')warnings.push('单标的回测：不限制也未核验历史沪深300成员资格；历史ST、停牌、分钟完整性和公司行动仍按完整数据校验。');
   if(actions.some(a=>a.cashBasis==='gross'))warnings.push('股息按税前金额核算，未计算个人持有期补税。');
   if(!metadata&&config.dataMode==='exploration')warnings.push('CSV探索：历史ST、成分股、公司行动与整日缺口未校验；不得将该结果视作正式研究。');
   if(incomplete.length)warnings.push(`${incomplete.length} 个交易日的分钟网格不完整；这些日线不会用于波段信号，缺少上一完整日线时禁止新开仓。`);

@@ -14,10 +14,11 @@ export const canonical=value=>JSON.stringify(value,(_key,v)=>v&&typeof v==='obje
 export const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const now=()=>new Date().toISOString(),date=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s;
 const failure=(code,message,details)=>Object.assign(Error(message),{code,details});
-// Reviewed predecessors retain query identities and engine. Calendar responses
-// are revalidated; incomplete old checkpoints are quarantined, never trusted.
+// Reviewed predecessors retain collection query identities and price basis.
+// Research jobs remain pinned to their strategy engine; collection-only jobs
+// never execute that engine. All collection responses are still revalidated.
 // Unknown pipelines still cannot reuse old work.
-const compatiblePipelines=new Set(['5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c']);
+const compatiblePipelines=new Set(['42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:canonical(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 export function yearStart(to){const d=new Date(to+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);d.setUTCFullYear(d.getUTCFullYear()-1);return d.toISOString().slice(0,10);}
 export function normalizeRequest(input){
@@ -141,13 +142,13 @@ export class ResearchManager {
   async execute(job){
     await this.stage(job,'preflight','检查固定输入和引擎版本');
     if(hash(await readFile(this.location(job.id,'request.json')))!==job.requestHash)throw failure('REQUEST_HASH','任务参数文件发生变化');
-    if(job.engineHash!==await engineHash())throw failure('ENGINE_CHANGED','引擎代码已改变。旧任务不能用新引擎静默恢复，请创建新任务');
+    if(job.request.purpose!=='collect'&&job.engineHash!==await engineHash())throw failure('ENGINE_CHANGED','引擎代码已改变。旧任务不能用新引擎静默恢复，请创建新任务');
     // An immutable snapshot needs no collection checkpoints. Keep its original
-    // provenance while still checking the request, snapshot and engine hashes.
+    // provenance while checking request/snapshot hashes and, for research, engine.
     const currentPipeline=await pipelineHash();
     if(!job.snapshotId&&job.pipelineHash!==currentPipeline){
       if(compatiblePipelines.has(job.pipelineHash)){
-        job.pipelineMigrations??=[];job.pipelineMigrations.push({from:job.pipelineHash,to:currentPipeline,at:iso(this.clock()),reason:'已审查升级：查询身份及引擎未变；新增日历覆盖校验，隔离不完整断点后重查'});job.pipelineHash=currentPipeline;
+        job.pipelineMigrations??=[];job.pipelineMigrations.push({from:job.pipelineHash,to:currentPipeline,at:iso(this.clock()),reason:'已审查升级：查询身份和行情口径兼容；采集任务不运行策略引擎，断点仍按当前规则重新校验'});job.pipelineHash=currentPipeline;
         await this.save(job,'兼容恢复旧任务，保留原参数及累计时间；交易日历先校验完整覆盖，不完整日历隔离后重查；升级前未计时时段无法补测');
       }else throw failure('PIPELINE_CHANGED','采集或验收代码已改变，不能与旧断点混用，请创建新任务');
     }
@@ -216,9 +217,9 @@ export class ResearchManager {
   async pause(id){const job=this.jobs.get(id);if(!job)throw failure('NOT_FOUND','任务不存在');if(!['running','queued'].includes(job.status))throw failure('STATE','任务当前无需暂停');
     if(job===this.active){job.controller.abort();await this.running;}else{job.status='paused';await this.save(job,'用户暂停，等待恢复');}return this.view(job);
   }
-  async resume(id){const job=this.jobs.get(id);if(!job?.request)throw failure('NOT_FOUND','任务请求损坏或不存在');if(!['paused','blocked','failed'].includes(job.status))throw failure('STATE','仅暂停或受阻任务可以恢复');if(job.engineHash!==this.fingerprint)throw failure('ENGINE_CHANGED','引擎已变更，请创建新任务');job.status='queued';delete job.error;delete job.collectorError;await this.save(job,'从已核验的检查点恢复');this.pump();return this.view(job);}
+  async resume(id){const job=this.jobs.get(id);if(!job?.request)throw failure('NOT_FOUND','任务请求损坏或不存在');if(!['paused','blocked','failed'].includes(job.status))throw failure('STATE','仅暂停或受阻任务可以恢复');if(job.request.purpose!=='collect'&&job.engineHash!==this.fingerprint)throw failure('ENGINE_CHANGED','引擎已变更，请创建新任务');job.status='queued';delete job.error;delete job.collectorError;await this.save(job,'从已核验的检查点恢复');this.pump();return this.view(job);}
   async report(job){if(!job?.reportHash)throw failure('NOT_FOUND','报告尚未生成');const body=await readFile(path.join(this.root,'reports',job.reportHash+'.json'));if(hash(body)!==job.reportHash)throw failure('REPORT_HASH','报告文件哈希不一致');return body;}
-  async repeat(id){const job=this.jobs.get(id);if(job?.status!=='completed')throw failure('STATE','仅完成的任务可固定快照复现');await this.report(job);if(job.engineHash!==this.fingerprint)throw failure('ENGINE_CHANGED','引擎已变更，无法按原版本复现');return this.create(null,{replay:job});}
+  async repeat(id){const job=this.jobs.get(id);if(job?.status!=='completed')throw failure('STATE','仅完成的任务可固定快照复现');await this.report(job);if(job.request.purpose!=='collect'&&job.engineHash!==this.fingerprint)throw failure('ENGINE_CHANGED','引擎已变更，无法按原版本复现');return this.create(null,{replay:job});}
   async close(){this.stopping=true;if(this.active){this.active.controller.abort();await this.running;}await this.saves;await rm(this.lock,{recursive:true,force:true});}
   async fetch(request){
     try{const url=new URL(request.url),pathname=url.pathname,base='/api/research/jobs';
