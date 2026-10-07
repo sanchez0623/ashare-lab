@@ -19,6 +19,7 @@ const fs=require('node:fs');
   const article=page.locator('#research-jobs article').filter({has:page.locator('[href="/api/research/jobs/'+job.id+'/report"]')});assert.match(await article.innerText(),/受阻/);
   assert.match(await article.innerText(),/累计运行/);
   const downloaded=page.waitForEvent('download');await article.locator('a[href$="/report"]').click();const report=JSON.parse(fs.readFileSync(await(await downloaded).path(),'utf8'));assert.equal(report.acceptance,'blocked');assert.equal(report.error.code,'NETWORK_TCP_NOT_GRANTED');assert.equal(report.input.snapshotId,null);
+  assert.match(report.error.details.collectorTraceback,/Blocked/);const saved=await page.request.get((process.env.ASHARE_TEST_URL||'http://127.0.0.1:8082')+'/api/research/jobs/'+job.id);assert.equal((await saved.json()).progress.error,report.error.message);
   const timingDownload=page.waitForEvent('download');await article.locator('a[href$="/timing"]').click();const timing=JSON.parse(fs.readFileSync(await(await timingDownload).path(),'utf8'));assert.ok(timing.timing.activeMs>=0);assert.ok(timing.events.length);assert.equal(timing.timing.runs[0].stopReason,'blocked');
   await page.reload({waitUntil:'networkidle'});await page.locator('nav [data-view=data]').click();assert.ok(await page.locator('[href="/api/research/jobs/'+job.id+'/report"]').count());
   await page.locator('#research-purpose').selectOption('research');await page.locator('#research-range').selectOption('custom');assert.equal(await page.locator('#research-start').evaluate(e=>e.readOnly),false);

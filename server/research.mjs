@@ -82,6 +82,8 @@ export function auditAccounting(result,bundle){
 async function engineHash(){const files=['engine.mjs','quality.mjs','data.mjs','rules.mjs','corporate.mjs','fees.mjs','inventory.mjs'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,'dist',f)))]);parts.push(['runner',hash(await readFile(path.join(project,'server/research-runner.mjs')))]);return hash(canonical(parts));}
 async function pipelineHash(){const files=['server/research.mjs','server/research-timing.mjs','collector/research_collect.py','collector/sources.py','collector/sync.py','collector/locking.py','collector/baostock_guard.py','collector/parquet_store.py'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,f)))]);return hash(canonical(parts));}
 const jsonResponse=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
+// Node decodes collector output as UTF-8; Windows pipe encodings must match.
+const pythonEnv=()=>({...process.env,PYTHONIOENCODING:'utf-8'});
 
 export class ResearchManager {
   constructor({root,bucket,collector,runner,clock=Date.now,heartbeatMs=5000}={}){this.root=path.resolve(root);this.bucket=bucket;this.collector=collector;this.runner=runner;this.clock=clock;this.heartbeatMs=heartbeatMs;this.jobs=new Map();this.active=null;this.stopping=false;this.saves=Promise.resolve();}
@@ -188,7 +190,7 @@ export class ResearchManager {
     if(this.sourceProbe)return this.sourceProbe;
     this.sourceProbe=(async()=>{
       const executable=await this.python();let value;
-      try{const stdout=await new Promise((resolve,reject)=>execFile(executable,[path.join(project,'collector/sources.py'),'--status'],{cwd:project,windowsHide:true,timeout:10000,maxBuffer:512*1024,encoding:'utf8'},(error,stdout)=>error?reject(error):resolve(stdout)));
+      try{const stdout=await new Promise((resolve,reject)=>execFile(executable,[path.join(project,'collector/sources.py'),'--status'],{cwd:project,env:pythonEnv(),windowsHide:true,timeout:10000,maxBuffer:512*1024,encoding:'utf8'},(error,stdout)=>error?reject(error):resolve(stdout)));
         value={backend:'local',ttlSeconds:60,...JSON.parse(stdout)};
       }catch(e){value={backend:'local',ttlSeconds:60,error:'无法读取Python数据源配置；网页演示仍可运行。请安装Python或设置ASHARE_PYTHON。',code:e.code==='ENOENT'?'PYTHON_MISSING':'SOURCE_STATUS_FAILED',sources:[]};}
       this.sourceCache={at:Date.now(),value};return value;
@@ -196,7 +198,7 @@ export class ResearchManager {
   }
   async collectPython(job,collection){
     const executable=await this.python();await rm(path.join(collection,'error.json'),{force:true});
-    const child=spawn(executable,[path.join(project,'collector/research_collect.py'),'--request',this.location(job.id,'request.json'),'--root',collection,'--store',path.join(this.root,'market'),'--parent',String(process.pid)],{cwd:project,windowsHide:true,stdio:['ignore','pipe','pipe']});this.child=child;
+    const child=spawn(executable,[path.join(project,'collector/research_collect.py'),'--request',this.location(job.id,'request.json'),'--root',collection,'--store',path.join(this.root,'market'),'--parent',String(process.pid)],{cwd:project,env:pythonEnv(),windowsHide:true,stdio:['ignore','pipe','pipe']});this.child=child;
     let pending='',stderr='';const abort=()=>{writeFile(path.join(collection,'cancel'),'pause').catch(()=>{});child.kill();};job.controller.signal.addEventListener('abort',abort,{once:true});
     child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{pending+=chunk;if(pending.length>1024*1024)pending=pending.slice(-65536);let index;while((index=pending.indexOf('\n'))!==-1){const line=pending.slice(0,index);pending=pending.slice(index+1);try{const p=JSON.parse(line);this.progress(job,p).catch(()=>{});}catch{}}});
     child.stderr.setEncoding('utf8');child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-4000);});
