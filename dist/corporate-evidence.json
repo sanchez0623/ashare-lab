@@ -1,19 +1,88 @@
 {
   "version": "official-action-1",
-  "records": [{
-    "id": "600188-20230717-special-dividend",
-    "symbol": "600188",
-    "title": "兖矿能源2022年年度权益分派实施公告",
-    "announcementNumber": "临2023-044",
-    "publishedAt": "2023-07-10 00:00",
-    "sourceURL": "https://static.cninfo.com.cn/finalpage/2023-07-10/1217254673.PDF",
-    "localDocument": "/evidence/600188-2023-07-10-dividend.pdf",
-    "documentSHA256": "15feaa25f08f36c07f07c5830cc9f10745a7203bc515eabd77028f8cc451137f",
-    "regularCashPerShare": 3.07,
-    "specialCashPerShare": 1.23,
-    "terms": {"type":"dividend","recordDate":"2023-07-14","exDate":"2023-07-17","payDate":"2023-07-17","shareListDate":"2023-07-17","cashPerShare":4.3,"bonusPerShare":0.5,"cashBasis":"gross"},
-    "acceptedOriginalCashPerShare": [3.07],
-    "previousTradingClose": 33.87,
-    "exchangeReference": 19.71
-  }]
+  "records": [
+    {
+      "id": "600188-20230717-special-dividend",
+      "symbol": "600188",
+      "title": "兖矿能源2022年年度权益分派实施公告",
+      "announcementNumber": "临2023-044",
+      "publishedAt": "2023-07-10 00:00",
+      "sourceURL": "https://static.cninfo.com.cn/finalpage/2023-07-10/1217254673.PDF",
+      "localDocument": "/evidence/600188-2023-07-10-dividend.pdf",
+      "documentSHA256": "15feaa25f08f36c07f07c5830cc9f10745a7203bc515eabd77028f8cc451137f",
+      "regularCashPerShare": 3.07,
+      "specialCashPerShare": 1.23,
+      "terms": {
+        "type": "dividend",
+        "recordDate": "2023-07-14",
+        "exDate": "2023-07-17",
+        "payDate": "2023-07-17",
+        "shareListDate": "2023-07-17",
+        "cashPerShare": 4.3,
+        "bonusPerShare": 0.5,
+        "cashBasis": "gross"
+      },
+      "acceptedOriginalCashPerShare": [
+        3.07
+      ],
+      "previousTradingClose": 33.87,
+      "exchangeReference": 19.71
+    },
+    {
+      "id": "600188-20210723-special-dividend",
+      "symbol": "600188",
+      "title": "兖州煤业股份有限公司2020年年度权益分派实施公告",
+      "announcementNumber": "临2021-047",
+      "publishedAt": "2021-07-15 00:00",
+      "publicationPolicy": "Conservative next-day availability after the dated HKEX overseas regulatory announcement; never earlier than the original SDK announcement time.",
+      "sourceURL": "https://www1.hkexnews.hk/listedco/listconews/sehk/2021/0714/2021071400516_c.pdf",
+      "localDocument": "/evidence/600188-2021-07-15-dividend.pdf",
+      "documentSHA256": "a0f9b1e0a42c8d4b10c0221bfa6f11ce09daa1d55bff3fa8f120a2ec7a666961",
+      "regularCashPerShare": 0.6,
+      "specialCashPerShare": 0.4,
+      "terms": {
+        "type": "dividend",
+        "recordDate": "2021-07-22",
+        "exDate": "2021-07-23",
+        "payDate": "2021-07-23",
+        "shareListDate": "",
+        "cashPerShare": 1.0,
+        "bonusPerShare": 0,
+        "cashBasis": "gross"
+      },
+      "acceptedOriginalCashPerShare": [
+        0.6
+      ],
+      "previousTradingClose": 18,
+      "exchangeReference": 17
+    },
+    {
+      "id": "600188-20220714-special-dividend",
+      "symbol": "600188",
+      "title": "兖矿能源集团股份有限公司2021年度权益分派实施公告",
+      "announcementNumber": "临2022-056",
+      "publishedAt": "2022-07-08 00:00",
+      "publicationPolicy": "Conservative next-day availability after the dated HKEX overseas regulatory announcement; never earlier than the original SDK announcement time.",
+      "sourceURL": "https://www.hkexnews.hk/listedco/listconews/sehk/2022/0707/2022070701149_c.pdf",
+      "localDocument": "/evidence/600188-2022-07-08-dividend.pdf",
+      "documentSHA256": "fa2f5182912ebb7097783de93905b765955573d531c9b2bb1bd25ed870f638b5",
+      "regularCashPerShare": 1.6,
+      "specialCashPerShare": 0.4,
+      "terms": {
+        "type": "dividend",
+        "recordDate": "2022-07-13",
+        "exDate": "2022-07-14",
+        "payDate": "2022-07-14",
+        "shareListDate": "",
+        "cashPerShare": 2.0,
+        "bonusPerShare": 0,
+        "cashBasis": "gross"
+      },
+      "acceptedOriginalCashPerShare": [
+        1.6
+      ],
+      "previousTradingClose": 35.94,
+      "exchangeReference": 33.94
+    }
+  ]
 }

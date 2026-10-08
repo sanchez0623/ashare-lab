@@ -26,7 +26,9 @@ class IPTests(unittest.TestCase):
   # BaoStock dials the provider with a raw TCP socket, which never uses
   # HTTP_PROXY/HTTPS_PROXY or a Windows system proxy; nor may the probe.
   env={'HTTPS_PROXY':'http://127.0.0.1:7897','HTTP_PROXY':'http://127.0.0.1:7897'}
-  with patch.dict(os.environ,env,clear=False):
+  # Isolate this mocked opener from inherited lowercase proxy variables.
+  # No network request is made, and the real process environment is restored.
+  with patch.dict(os.environ,env,clear=True):
    # ProxyHandler registers one <scheme>_open dispatcher per configured proxy, so
    # an empty mapping registers none and the opener cannot reach a proxy at all.
    def proxies(use_proxy):return [h.proxies for h in public_ip._opener(use_proxy).handlers if isinstance(h,urllib.request.ProxyHandler)]

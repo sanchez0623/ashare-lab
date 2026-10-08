@@ -81,7 +81,7 @@ test('only the reviewed legacy pipeline can migrate and reuse original research 
   ctx.manager.pipelineFingerprint='5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967';
   const j=await ctx.manager.create(input(b)),done=await until(ctx.manager,j.id);assert.equal(done.status,'completed',JSON.stringify(done.error));
   assert.equal(done.pipelineMigrations.length,1);assert.notEqual(done.pipelineHash,ctx.manager.pipelineFingerprint);
-  for(const legacy of ['29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c','2919a15466915f406402cc68147bcfcbb2abcfd156dd7fd787ce8a53bbcf5942']){
+  for(const legacy of ['161ff22c9448e9548c434d4427927fe5f43f9da3f38e5c82a527f842e6164868','bb58b6e10127f6239bd11c28516dabaff560fb6a75d45f363699a478e51f0eb3','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c','2919a15466915f406402cc68147bcfcbb2abcfd156dd7fd787ce8a53bbcf5942']){
    ctx.manager.pipelineFingerprint=legacy;
    const raw=await ctx.manager.create({...input(b),purpose:'collect'}),collected=await until(ctx.manager,raw.id);assert.equal(collected.status,'completed');assert.equal(collected.pipelineMigrations.length,1);assert.equal(collected.request.purpose,'collect');assert.equal(collected.pipelineMigrations[0].from,legacy);
   }
