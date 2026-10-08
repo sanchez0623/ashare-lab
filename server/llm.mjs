@@ -1,8 +1,8 @@
 import {defaults,validate} from '../dist/engine.mjs';
 import {parameterSchema,parameterContext,validateParameterValue,tuningKeys} from '../dist/parameter-schema.mjs';
 
-export const llmVersion='1.0';
-export const llmError=(code,message,status=400)=>Object.assign(Error(message),{code,status});
+export const llmVersion='1.1';
+export const llmError=(code,message,status=400,field)=>Object.assign(Error(message),{code,status,...(field?{field}:{})});
 export const llmReply=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 export function sameOrigin(request){
  const url=new URL(request.url),origin=request.headers.get('origin');
@@ -19,12 +19,16 @@ export async function llmJSON(request){
 const ownObject=v=>!!v&&typeof v==='object'&&!Array.isArray(v);
 export function validateProvider(p,{local=false}={}){
  if(!ownObject(p)||Object.keys(p).some(k=>!['id','name','kind','baseUrl','model','apiKey'].includes(k)))throw llmError('PROFILE','服务配置字段无效');
- if(!/^[a-zA-Z0-9_-]{1,48}$/.test(p.id??'')||typeof p.name!=='string'||!p.name.trim()||p.name.length>60||!['volcengine','doubao','local','custom'].includes(p.kind)||typeof p.model!=='string'||!p.model.trim()||p.model.length>150||/[\r\n]/.test(p.model))throw llmError('PROFILE','请填写有效的服务编号、名称和模型 ID');
- let url;try{url=new URL(p.baseUrl);}catch{throw llmError('ENDPOINT','服务地址无效');}
+ const id=typeof p.id==='string'?p.id.trim():'';
+ if(!/^[a-zA-Z0-9_.-]{1,48}$/.test(id))throw llmError('PROFILE','服务编号需为 1–48 个英文、数字、点号、下划线或短横线，例如 deepseek-v4.1-flash；显示名称可以用中文',400,'id');
+ if(typeof p.name!=='string'||!p.name.trim()||p.name.trim().length>60)throw llmError('PROFILE','显示名称必填，最多 60 个字符，可以用中文',400,'name');
+ if(!['volcengine','doubao','local','custom'].includes(p.kind))throw llmError('PROFILE','请选择有效的服务类型：火山引擎、豆包、本地或其他兼容服务',400,'kind');
+ if(typeof p.model!=='string'||!p.model.trim()||p.model.trim().length>150||/[\r\n]/.test(p.model))throw llmError('PROFILE','模型 / 推理接入点 ID 必填，最多 150 个字符且不能换行；请填写服务商提供的实际 model 或 ep-…',400,'model');
+ let url;try{if(typeof p.baseUrl!=='string')throw Error();url=new URL(p.baseUrl.trim());}catch{throw llmError('ENDPOINT','Base URL 无效，请填写完整的 http:// 或 https:// 服务地址',400,'baseUrl');}
  const host=url.hostname.toLowerCase(),loopback=['localhost','127.0.0.1','[::1]'].includes(host),privateLiteral=/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.)/.test(host)||host.includes(':')||host.endsWith('.local');
- if(url.username||url.password||url.search||url.hash||!['https:','http:'].includes(url.protocol)||host==='metadata.google.internal'||host.startsWith('169.254.')||(!local&&(loopback||privateLiteral))||(url.protocol==='http:'&&!(local&&p.kind==='local')))throw llmError('ENDPOINT','云端服务需 HTTPS；HTTP 内网/本机服务仅能在本地版配置，地址不能含凭据或查询参数');
- if(typeof (p.apiKey??'')!=='string'||(p.apiKey??'').length>4096||/[\r\n]/.test(p.apiKey??''))throw llmError('KEY','API Key 格式无效');
- return {...p,name:p.name.trim(),model:p.model.trim(),baseUrl:url.href.replace(/\/+$/,''),apiKey:p.apiKey??''};
+ if(url.username||url.password||url.search||url.hash||!['https:','http:'].includes(url.protocol)||host==='metadata.google.internal'||host.startsWith('169.254.')||(!local&&(loopback||privateLiteral))||(url.protocol==='http:'&&!(local&&p.kind==='local')))throw llmError('ENDPOINT','云端服务需 HTTPS；HTTP 内网/本机服务仅能在本地版配置，地址不能含凭据或查询参数',400,'baseUrl');
+ if(typeof (p.apiKey??'')!=='string'||(p.apiKey??'').length>4096||/[\r\n]/.test(p.apiKey??''))throw llmError('KEY','API Key 格式无效',400,'apiKey');
+ return {...p,id,name:p.name.trim(),model:p.model.trim(),baseUrl:url.href.replace(/\/+$/,''),apiKey:p.apiKey??''};
 }
 export function publicProvider(p){return {id:p.id,name:p.name,kind:p.kind,baseUrl:p.baseUrl,model:p.model,hasKey:!!p.apiKey,ready:p.kind==='local'||!!p.apiKey};}
 export function requestConfig(input){
@@ -77,7 +81,7 @@ export class LLMGateway{
   const now=this.clock();this.calls=this.calls.filter(t=>now-t<60000);
   if(this.active||this.calls.length>=10)throw llmError('RATE_LIMIT','已有模型请求运行，或一分钟内已调用 10 次；请稍后再试',429);
   this.active=true;this.calls.push(now);try{return llmReply(await suggestParameters(provider,input,{fetcher:this.fetcher,timeoutMs:this.timeoutMs}));}finally{this.active=false;}
- }catch(e){return llmReply({error:e.status?e.message:'模型服务配置不可用，请检查后台配置',code:e.code??'LLM_CONFIG'},e.status??503);}}
+ }catch(e){return llmReply({error:e.status?e.message:'模型服务配置不可用，请检查后台配置',code:e.code??'LLM_CONFIG',...(e.field?{field:e.field}:{})},e.status??503);}}
 }
 let hostedGateway,hostedConfig;
 export function hostedLLM(request,env){

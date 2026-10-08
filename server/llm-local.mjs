@@ -27,14 +27,15 @@ export class LocalLLM extends LLMGateway{
     let next;
     if(input.removeId){if(input.provider||typeof input.removeId!=='string'||!this.saved.some(p=>p.id===input.removeId))throw llmError('PROFILE','要移除的服务不存在');next=this.saved.filter(p=>p.id!==input.removeId);}
     else{
-     const old=this.saved.find(p=>p.id===input.provider?.id);
-     if(old?.apiKey&&old.baseUrl.replace(/\/+$/,'')!==String(input.provider?.baseUrl??'').replace(/\/+$/,'')&&!input.provider?.apiKey&&!input.clearKey)throw llmError('KEY_ENDPOINT','服务地址改变时，请重新填写 API Key 或勾选清除密钥；原密钥不会转发到新地址');
-     const p=validateProvider({...input.provider,apiKey:input.clearKey?'':input.provider?.apiKey||old?.apiKey||''},{local:true});
+     const candidate=validateProvider({...input.provider,apiKey:input.clearKey?'':input.provider?.apiKey??''},{local:true});
+     const old=this.saved.find(p=>p.id===candidate.id);
+     if(old?.apiKey&&old.baseUrl!==candidate.baseUrl&&!candidate.apiKey&&!input.clearKey)throw llmError('KEY_ENDPOINT','服务地址改变时，请重新填写 API Key 或勾选清除密钥；原密钥不会转发到新地址',400,'baseUrl');
+     const p={...candidate,apiKey:input.clearKey?'':candidate.apiKey||old?.apiKey||''};
      next=[...this.saved.filter(x=>x.id!==p.id),p];if(next.length>20)throw llmError('PROFILE','最多保存 20 个模型服务');
     }
     await this.persist(next);return llmReply({providers:next.map(publicProvider),saved:true});
    };
    const task=this.writes.then(change);this.writes=task.catch(()=>{});return await task;
-  }catch(e){return llmReply({error:e.status?e.message:'本地服务配置保存失败，未确认更新；请保留输入后重试',code:e.code??'PROFILE_SAVE'},e.status??503);}
+  }catch(e){return llmReply({error:e.status?e.message:'本地服务配置保存失败，未确认更新；请保留输入后重试',code:e.code??'PROFILE_SAVE',...(e.field?{field:e.field}:{})},e.status??503);}
  }
 }

@@ -5,8 +5,9 @@ export function setupLLM({getContext,setConfig,notify}){
  const $=s=>document.querySelector(s),escape=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  let providers=[],editable=false,proposal=null,sourceData=null,active=null;
  const display=(key,v)=>key==='strategy'?strategyNames[v]:key==='management'?managementNames[v]:key==='timeframe'?periodLabel(v):Number.isFinite(v)?v.toLocaleString('zh-CN',{maximumFractionDigits:5}):v;
- async function request(url,body,signal){const r=await fetch(url,body===undefined?{signal}:{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal});let v;try{v=await r.json();}catch{throw Error('模型后台未返回 JSON，请更新完整部署包并重启');}if(!r.ok)throw Error(v.error||'模型请求失败');return v;}
+ async function request(url,body,signal){const r=await fetch(url,body===undefined?{signal}:{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body),signal});let v;try{v=await r.json();}catch{throw Error('模型后台未返回 JSON，请更新完整部署包并重启');}if(!r.ok)throw Object.assign(Error(v.error||'模型请求失败'),{code:v.code,field:v.field});return v;}
  function clear(){proposal=null;$('#llm-proposal').replaceChildren();$('#llm-apply').hidden=true;}
+ function clearProfileValidation(form){for(const field of form.elements){field.setCustomValidity?.('');field.removeAttribute('aria-invalid');}}
  function providerOptions(selected){
   $('#llm-provider').innerHTML=providers.length?providers.map(p=>`<option value="${escape(p.id)}">${escape(p.name)} · ${escape(p.model)}${p.ready?'':' · 缺少密钥'}</option>`).join(''):'<option value="">尚未配置模型服务</option>';
   if(providers.some(p=>p.id===selected))$('#llm-provider').value=selected;
@@ -22,14 +23,19 @@ export function setupLLM({getContext,setConfig,notify}){
  function editProfile(){
   const p=providers.find(p=>p.id===$('#llm-profile-existing').value),form=$('#llm-profile-form');
   for(const [name,value]of Object.entries({id:p?.id??'',name:p?.name??'',kind:p?.kind??'volcengine',baseUrl:p?.baseUrl??'https://ark.cn-beijing.volces.com/api/v3',model:p?.model??'',apiKey:''}))form.elements.namedItem(name).value=value;
+  clearProfileValidation(form);
   form.elements.namedItem('id').readOnly=!!p;form.elements.namedItem('clearKey').checked=false;form.elements.namedItem('apiKey').placeholder=p?.hasKey?'已配置；留空保留':'云端服务填写 API Key';$('#llm-profile-remove').disabled=!p;
  }
+ const profileForm=$('#llm-profile-form');
+ profileForm.addEventListener('input',()=>clearProfileValidation(profileForm));
+ profileForm.addEventListener('change',e=>{clearProfileValidation(profileForm);if(['id','name','model','baseUrl'].includes(e.target.name))e.target.value=e.target.value.trim();});
+ profileForm.addEventListener('invalid',e=>{e.target.setAttribute('aria-invalid','true');$('#llm-status').textContent=e.target.name==='id'?'服务编号需为 1–48 个英文、数字、点号、下划线或短横线，例如 deepseek-v4.1-flash。':'请检查'+(e.target.closest('label')?.firstChild?.textContent??'服务配置')+'：'+e.target.validationMessage;},true);
  $('#llm-profile-existing').onchange=editProfile;
  $('#llm-profile-form [name=kind]').onchange=e=>{if($('#llm-profile-existing').value)return;const local=e.target.value==='local';$('#llm-profile-form [name=baseUrl]').value=local?'http://127.0.0.1:11434/v1':e.target.value==='custom'?'':'https://ark.cn-beijing.volces.com/api/v3';};
  $('#llm-profile-form').onsubmit=async e=>{
   e.preventDefault();const form=e.currentTarget,submit=$('#llm-profile-save');submit.disabled=true;
   try{const fields=Object.fromEntries(new FormData(form)),provider=Object.fromEntries(['id','name','kind','baseUrl','model','apiKey'].map(k=>[k,fields[k]]));await request('/api/llm/providers/save',{provider,clearKey:fields.clearKey==='on'});form.elements.namedItem('apiKey').value='';clear();await refreshProviders();$('#llm-provider').value=provider.id;$('#llm-profile-existing').value=provider.id;editProfile();$('#llm-status').textContent='服务已保存；密钥不回传浏览器。发送参数要求时才会调用模型。';}
-  catch(error){$('#llm-status').textContent=error.message;}finally{submit.disabled=false;}
+  catch(error){$('#llm-status').textContent=error.message;const field=form.elements.namedItem(error.field??'');if(field?.setCustomValidity){field.setCustomValidity(error.message);field.setAttribute('aria-invalid','true');field.focus();field.reportValidity();}}finally{submit.disabled=false;}
  };
  $('#llm-profile-remove').onclick=async()=>{const id=$('#llm-profile-existing').value;if(!id)return;try{await request('/api/llm/providers/save',{removeId:id});clear();await refreshProviders();editProfile();}catch(e){$('#llm-status').textContent=e.message;}};
  $('#llm-refresh').onclick=refreshProviders;

@@ -63,3 +63,25 @@ test('multiple local profiles persist atomically, blank keys retain credentials 
   await writeFile(local.file,'broken');const damaged=await new LocalLLM({root}).init();assert.equal((await damaged.fetch(request('/api/llm/providers'))).status,503);assert.equal(await readFile(local.file,'utf8'),'broken');
  }finally{await rm(root,{recursive:true,force:true});}
 });
+
+test('dotted model-name service identifiers save, reload and call the unchanged Coding endpoint; invalid profiles identify the field',async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),'ashare-llm-dotted-'));
+ const provider={id:'deepseek-v4.1-flash',name:'deepseek-v4.1-flash',kind:'volcengine',baseUrl:'https://ark.cn-beijing.volces.com/api/coding/v3',model:'deepseek-v4.1-flash',apiKey:'xxx'};
+ let calls=0;
+ try{
+  const fetcher=async(url,options)=>{calls++;assert.equal(url,provider.baseUrl+'/chat/completions');assert.equal(JSON.parse(options.body).model,provider.model);assert.equal(options.headers.authorization,'Bearer xxx');return completion(output);};
+  const local=await new LocalLLM({root,fetcher}).init();
+  const r=await local.fetch(request('/api/llm/providers/save',{provider,clearKey:false}));assert.equal(r.status,200);assert.equal(calls,0);assert.ok(!(await r.text()).includes('xxx'));
+  // Normalized IDs must update the existing profile and retain its key, not create a duplicate.
+  const padded={...provider,id:' '+provider.id+' ',name:' 测试服务 ',model:' '+provider.model+' ',baseUrl:' '+provider.baseUrl+'/ ',apiKey:''};
+  assert.equal((await local.fetch(request('/api/llm/providers/save',{provider:padded,clearKey:false}))).status,200);assert.equal(local.saved.length,1);assert.equal(local.saved[0].apiKey,'xxx');assert.equal(local.saved[0].name,'测试服务');
+  const reloaded=await new LocalLLM({root,fetcher}).init();assert.equal(reloaded.saved[0].id,provider.id);assert.equal(reloaded.saved[0].model,provider.model);
+  for(const [field,value]of [['id','中文编号'],['id','bad/id'],['id',123],['id','a'.repeat(49)],['name',' '],['kind','invalid'],['model',''],['model','bad\nmodel'],['baseUrl','not-a-url'],['apiKey','sensitive\r\nvalue']]){
+   const bad=await reloaded.fetch(request('/api/llm/providers/save',{provider:{...provider,[field]:value},clearKey:false})),body=await bad.json();assert.equal(bad.status,400);assert.equal(body.field,field);assert.ok(!body.error.includes('xxx'));assert.ok(!body.error.includes('sensitive'));assert.equal(reloaded.saved.length,1);
+  }
+  assert.equal(calls,0);
+  const hosted=await new LLMGateway({providers:()=>[provider]}).fetch(request('/api/llm/providers'));assert.equal(hosted.status,200);assert.equal((await hosted.json()).providers[0].id,provider.id);
+  const suggestion=await reloaded.fetch(request('/api/llm/suggest',{...input,providerId:provider.id}));assert.equal(suggestion.status,200);assert.equal(calls,1);assert.deepEqual((await suggestion.json()).changes,output.changes);
+  const destinationChange=await reloaded.fetch(request('/api/llm/providers/save',{provider:{...padded,baseUrl:'https://different.example/v1'}}));assert.equal(destinationChange.status,400);assert.equal((await destinationChange.json()).field,'baseUrl');assert.equal(reloaded.saved[0].apiKey,'xxx');
+ }finally{await rm(root,{recursive:true,force:true});}
+});
