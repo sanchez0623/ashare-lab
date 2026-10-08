@@ -7,6 +7,7 @@ import {Readable} from 'node:stream';
 import {ResearchManager} from '../server/research.mjs';
 import {MinuteRepairManager} from '../server/minute-repair.mjs';
 import {LocalLLM} from '../server/llm-local.mjs';
+import {archiveCorporateCorrection} from '../server/corporate-archive-local.mjs';
 
 const projectRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const validKey=key=>/^(snapshots|manifests)\/[a-f0-9]{64}\.json$/.test(key);
@@ -47,10 +48,11 @@ export async function loadBuiltWorker(root=projectRoot){
   if(typeof worker?.fetch!=='function')throw Object.assign(Error('后台构建文件入口无效：'+entry+'；需要导出可调用的 fetch。'),{code:'BUILD_ENTRY_INVALID'});
   return worker;
 }
-export async function startLocal({port=8080,dataDir=path.join(projectRoot,'.local-data'),assetsDir=path.join(projectRoot,'dist/client'),worker,researchOptions={},repairOptions={},llmOptions={}}={}){
+export async function startLocal({port=8080,dataDir=path.join(projectRoot,'.local-data'),assetsDir=path.join(projectRoot,'dist/client'),worker,researchOptions={},repairOptions={},llmOptions={},corporateOptions={}}={}){
   if(!worker)worker=await loadBuiltWorker();
   await mkdir(dataDir,{recursive:true});const env={BUCKET:new FileBucket(path.join(dataDir,'warehouse')),ASSETS:fileAssets(assetsDir)};
   const research=await new ResearchManager({...researchOptions,root:path.join(dataDir,'research'),bucket:env.BUCKET}).init();
+  env.CORPORATE_ARCHIVER=corporateOptions.archiver??(bundle=>archiveCorporateCorrection(bundle,{python:()=>research.python(),root:path.join(dataDir,'research')}));
   let repairs;try{repairs=await new MinuteRepairManager({...repairOptions,root:path.join(dataDir,'research','minute-repairs'),bucket:env.BUCKET,python:()=>research.python()}).init();}catch(e){await research.close();throw e;}
   let llm;try{llm=await new LocalLLM({...llmOptions,root:path.join(dataDir,'llm')}).init();}catch(e){await Promise.all([research.close(),repairs.close()]);throw e;}
   const server=http.createServer(async(req,res)=>{

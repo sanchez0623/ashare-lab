@@ -1,0 +1,19 @@
+{
+  "version": "official-action-1",
+  "records": [{
+    "id": "600188-20230717-special-dividend",
+    "symbol": "600188",
+    "title": "兖矿能源2022年年度权益分派实施公告",
+    "announcementNumber": "临2023-044",
+    "publishedAt": "2023-07-10 00:00",
+    "sourceURL": "https://static.cninfo.com.cn/finalpage/2023-07-10/1217254673.PDF",
+    "localDocument": "/evidence/600188-2023-07-10-dividend.pdf",
+    "documentSHA256": "15feaa25f08f36c07f07c5830cc9f10745a7203bc515eabd77028f8cc451137f",
+    "regularCashPerShare": 3.07,
+    "specialCashPerShare": 1.23,
+    "terms": {"type":"dividend","recordDate":"2023-07-14","exDate":"2023-07-17","payDate":"2023-07-17","shareListDate":"2023-07-17","cashPerShare":4.3,"bonusPerShare":0.5,"cashBasis":"gross"},
+    "acceptedOriginalCashPerShare": [3.07],
+    "previousTradingClose": 33.87,
+    "exchangeReference": 19.71
+  }]
+}

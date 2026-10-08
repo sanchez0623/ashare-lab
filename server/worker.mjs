@@ -1,6 +1,8 @@
 import {auditBundle} from '../dist/quality.mjs';
 import {hostedSourceStatus,probeLixinger} from './hosted-sources.mjs';
 import {assembleStored} from './assemble.mjs';
+import {correctStoredActions} from './corporate-correction.mjs';
+import {verifyOfficialCorrections} from '../dist/corporate-correction.mjs';
 import {verifyRepairSnapshot} from '../dist/minute-repair.mjs';
 import {hostedLLM} from './llm.mjs';
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
@@ -20,14 +22,14 @@ export default {async fetch(request,env){
       const id=url.searchParams.get('id');if(!/^[a-f0-9]{64}$/.test(id??''))return reply({error:'快照编号无效'},400);
       const obj=await env.BUCKET.get('snapshots/'+id+'.json');return obj?new Response(obj.body,{headers:{'content-type':'application/json; charset=utf-8','cache-control':'private, max-age=31536000, immutable','etag':obj.httpEtag}}):reply({error:'快照不存在'},404);
     }
-    if(url.pathname==='/api/data/assemble'&&request.method==='POST'){
+    if(['/api/data/assemble','/api/data/corporate-correction'].includes(url.pathname)&&request.method==='POST'){
       const origin=request.headers.get('origin');if(origin&&origin!==url.origin)return reply({error:'只接受本站写入'},403);
       if(!request.headers.get('content-type')?.startsWith('application/json'))return reply({error:'需要JSON合并参数'},415);
       const reader=request.body?.getReader();if(!reader)return reply({error:'参数为空'},400);let size=0;const chunks=[];
       while(true){const x=await reader.read();if(x.done)break;size+=x.value.byteLength;if(size>20000){await reader.cancel();return reply({error:'合并参数超过20KB'},413);}chunks.push(x.value);}
       const bytes=new Uint8Array(size);let offset=0;for(const x of chunks){bytes.set(x,offset);offset+=x.length;}
       let input;try{input=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}catch{return reply({error:'合并参数JSON无效'},400);}
-      const saved=await assembleStored(env.BUCKET,input);return reply(saved,saved.reused?200:201);
+      const saved=url.pathname==='/api/data/corporate-correction'?await correctStoredActions(env.BUCKET,input,{archiver:env.CORPORATE_ARCHIVER}):await assembleStored(env.BUCKET,input);return reply(saved,saved.reused?200:201);
     }
     if(url.pathname==='/api/data/ingest'&&request.method==='POST'){
       // The platform dispatch authenticates this owner-private Site before entry.
@@ -41,6 +43,7 @@ export default {async fetch(request,env){
       if(bundle.bars?.length>120000)return reply({error:'单快照最多 120,000 根行情，较长历史请分段采集'},400);
       let report;try{report=auditBundle(bundle,{scope:bundle.metadata?.collectionPurpose==='market-data-only'||bundle.metadata?.universe==='SINGLE_SECURITY'?'single-security':'hs300'});}catch(e){return reply({error:e.message},400);}
       if(bundle.metadata?.minuteRepair)await verifyRepairSnapshot(bundle);
+      verifyOfficialCorrections(bundle);
       const digest=await crypto.subtle.digest('SHA-256',bytes),id=[...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,'0')).join('');
       const key='manifests/'+id+'.json',existing=await env.BUCKET.get(key);if(existing)return reply({...await existing.json(),reused:true});
       const metadata=bundle.metadata??{};const manifest={id,symbol:metadata.symbol??'',name:metadata.name??'',board:metadata.board,timeframe:metadata.timeframe,source:metadata.source??'uploaded',syncedAt:new Date().toISOString(),bytes:size,report};

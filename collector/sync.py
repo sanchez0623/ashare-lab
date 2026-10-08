@@ -104,7 +104,9 @@ def normalize_baostock(symbol,history_start,end,basic,cal,daily_raw,minute_raw,f
     # change must map to a fully specified cash/bonus event and its economics.
     # Rights and unknown transformations fail formal admission, never get ignored.
     cov['actions']={'status':'complete','from':history_start,'to':end,'source':'baostock dividends + all factor events + exchange ex-reference reconciliation; unresolved events blocked by audit'}
-    return {'bars':bars,'daily':daily,'calendar':[r['calendar_date'] for r in cal if r['is_trading_day']=='1'],'actions':actions,'factors':fac,'listedDate':basic[0].get('ipoDate') if basic else None,'coverage':cov,'raw':{'daily':daily_raw,'minute':minute_raw,'dividends':dividends,'factors':fac,'basic':basic,'calendar':cal}}
+    from corporate_correction import correct_actions
+    actions,corrections=correct_actions(symbol,actions,daily)
+    return {'bars':bars,'daily':daily,'calendar':[r['calendar_date'] for r in cal if r['is_trading_day']=='1'],'actions':actions,'corporateCorrections':corrections,'factors':fac,'listedDate':basic[0].get('ipoDate') if basic else None,'coverage':cov,'raw':{'daily':daily_raw,'minute':minute_raw,'dividends':dividends,'factors':fac,'basic':basic,'calendar':cal}}
 
 def lixinger_daily(symbol,start,end,price_type='ex_rights'):
     import requests
@@ -165,6 +167,7 @@ def sync_one(args,symbol,board):
         conflicts=[{'date':r[0],'status':'unresolved','job':r[1]} for r in db.execute('SELECT date,job FROM conflicts WHERE source=? AND symbol=? AND tf=? AND date>=? AND date<?',(args.provider,symbol,args.timeframe,args.start,args.end+' 23:59'))]
         metadata={'symbol':symbol,'board':board,'source':args.provider,'timeframe':args.timeframe,'listedDate':result['listedDate'],'requested':{'from':args.start,'to':args.end},'timezone':'Asia/Shanghai','timestampConvention':'bar-close','priceBasis':'raw','volumeUnit':'shares','syncedAt':started,'rawResponseSHA256':raw_hash,'syncMode':'incremental-7-day-overlap' if args.incremental else 'bulk','coverage':result['coverage'],'conflicts':conflicts,'providerDuplicates':duplicates,'scheduleStatus':'not-enabled'}
         metadata['coverage']['calendar']={'status':'complete','from':args.start,'to':args.end,'source':'baostock' if args.provider=='baostock' else 'akshare/sina trade calendar'}
+        if result.get('corporateCorrections'):metadata['corporateCorrections']=result['corporateCorrections']
         bundle={'schemaVersion':1,'metadata':metadata,'bars':bars,'calendar':result['calendar'],'daily':result['daily'],'actions':result['actions'],'factors':result['factors']}
         if getattr(args,'universe',None):
             bundle['universe']=args.universe

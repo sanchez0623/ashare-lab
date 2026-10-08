@@ -1,0 +1,25 @@
+// Synthetic full grid; actual announcement terms only. No provider requests.
+const {chromium}=require('/opt/codex/runtimes/cua/lib/node_modules/playwright');
+const assert=require('node:assert/strict'),path=require('node:path'),os=require('node:os');const {mkdtemp,rm,readFile}=require('node:fs/promises');
+(async()=>{
+ const {startLocal}=await import('../scripts/local-server.mjs'),{dividendFixture}=await import('./corporate-correction-fixture.mjs');
+ const root=await mkdtemp(path.join(os.tmpdir(),'ashare-action-ui-')),server=await startLocal({port:0,dataDir:root}),base='http://127.0.0.1:'+server.address().port,b=dividendFixture();b.bars[4000].volume+=1000;
+ const browser=await chromium.launch({executablePath:'/usr/bin/chromium',headless:true,args:['--no-sandbox']});
+ try{
+  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));const ingested=await page.request.post(base+'/api/data/ingest',{data:b});assert.equal(ingested.status(),201);const original=await ingested.json();
+  await page.goto(base,{waitUntil:'networkidle'});await page.locator('nav [data-view=data]').click();await page.locator('#warehouse-list tbody tr').first().locator('[data-bundle]').click();await page.waitForFunction(()=>document.querySelector('#quality-status').textContent.includes('按已核验公告修复'));
+  assert.match(await page.locator('#quality-status').innerText(),/3.07 → 4.3/);const href=await page.locator('#quality-status').getByText('查看已核验公告',{exact:true}).getAttribute('href');assert.equal((await page.request.get(base+href)).headers()['content-type'],'application/pdf');
+  await page.locator('nav [data-view=backtest]').click();await page.locator('[data-strategy=ma]').click();await page.locator('[name=from]').fill('2023-07-03');await page.locator('[name=to]').fill('2023-09-15');await page.locator('[name=minCommission]').fill('7.5');await page.locator('[name=capital]').fill('765432');await page.locator('#timeframe').selectOption('15m');
+  await page.locator('#run').click();await page.waitForFunction(()=>!document.querySelector('#run').disabled);assert.match(await page.locator('#config-status').innerText(),/除权参考价/);assert.ok(await page.locator('#backtest-actions').getByText('按已核验公告修复',{exact:true}).isVisible());
+  for(const width of [360,421,828,1440]){await page.setViewportSize({width,height:1000});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),'correction controls overflow '+width);}
+  await page.screenshot({path:'/workspace/scratch/corporate-repair-before.png'});
+  await page.locator('#backtest-actions').getByText('按已核验公告修复',{exact:true}).click();await page.waitForFunction(()=>document.querySelector('#config-status').textContent.includes('公司行动修订已保存'),{},{timeout:30000});
+  assert.equal(await page.locator('[name=from]').inputValue(),'2023-07-03');assert.equal(await page.locator('[name=to]').inputValue(),'2023-09-15');assert.equal(await page.locator('[name=minCommission]').inputValue(),'7.5');assert.equal(await page.locator('[name=capital]').inputValue(),'765432');assert.equal(await page.locator('#timeframe').inputValue(),'15m');
+  const catalog=(await (await page.request.get(base+'/api/data/catalog')).json()).entries,fixed=catalog.find(x=>x.corporateCorrections);assert.ok(fixed);assert.equal(fixed.report.status,'warning');assert.equal(catalog.length,2);const corrected=await (await page.request.get(base+'/api/data/bundle?id='+fixed.id)).json();assert.equal(corrected.actions[0].cashPerShare,4.3);assert.ok(corrected.metadata.parquetArchive.tables.actions);assert.equal(corrected.metadata.corporateCorrections.records[0].sourceSnapshotId,original.id);assert.equal((await (await page.request.get(base+'/api/data/bundle?id='+original.id)).json()).actions[0].cashPerShare,3.07);
+  const archive=corrected.metadata.parquetArchive.tables.actions;await readFile(path.join(root,'research','market','parquet',archive.path));
+  await page.locator('#run').click();await page.waitForFunction(()=>!document.querySelector('#run').disabled,{},{timeout:30000});assert.match(await page.locator('#config-status').innerText(),/回测完成/);
+  const repeat=await page.request.post(base+'/api/data/corporate-correction',{data:{snapshots:[original.id]}});assert.equal((await repeat.json()).entries[0].id,fixed.id);
+  await page.locator('nav [data-view=data]').click();assert.match(await page.locator('#quality-status').innerText(),/已按公告修订.*3.07 → 4.3/);assert.match(await page.locator('#quality-status').innerText(),/警告/);assert.equal(await page.locator('#quality-status').getByText('按已核验公告修复',{exact:true}).count(),0);await page.screenshot({path:'/workspace/scratch/corporate-repair-after.png'});assert.deepEqual(errors,[]);
+  console.log('Official evidence PDF, both repair entry points, immutable parent, real Parquet readback, repeat-ID, date/fee/capital/timeframe retention, warning backtest, four viewport widths: passed. Synthetic candles only.');
+ }finally{await browser.close();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true});}
+})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -192,6 +192,9 @@ def collect(request,root,store,emit=lambda x:None,parent=None,bs=None,guard_fact
         cov=result['coverage'];cov['universe']={'status':'complete','from':start,'to':end,'source':'baostock query-date weekly snapshots'} if purpose=='research' else {'status':'not-requested','reason':'仅采集指定证券行情，无指数成员资格判断'}
         metadata={'symbol':symbol,'name':basic[0].get('code_name',''),'board':request['board'],'source':'baostock','timeframe':'5m','listedDate':result['listedDate'],'requested':{'from':start,'to':end},'research':{'from':request['from'],'to':end,'warmupSessions':needed},'universe':'HS300','universePolicy':'weekly-asof-next-session','priceBasis':'raw','volumeUnit':'shares','timezone':'Asia/Shanghai','timestampConvention':'bar-close','coverage':cov,'providerDuplicates':duplicates,'conflicts':conflicts,'provenance':{'collectorVersion':VERSION,'sdkVersion':sdk_version,'environment':environment,'queries':cache.proofs}}
         metadata['incrementalPlan']=plan_summary
+        if result.get('corporateCorrections'):
+            metadata['corporateCorrections']=result['corporateCorrections']
+            emit({'stage':'collect','message':'已按核验公告补全特别股息；原始SDK响应保留，修订前后值及公告依据写入快照'})
         if purpose=='collect':metadata.update(universe='SINGLE_SECURITY',universePolicy='not-requested',collectionPurpose='market-data-only')
         bundle={'schemaVersion':1,'metadata':metadata,**{k:result[k] for k in ('bars','daily','calendar','actions','factors')},'universe':universe}
         from parquet_store import archive

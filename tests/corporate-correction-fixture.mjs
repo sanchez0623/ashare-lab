@@ -1,0 +1,8 @@
+import {slots} from '../dist/data.mjs';
+// Synthetic full grid with the reported event's actual terms; no real candles.
+export function dividendFixture(){
+ const calendar=[];for(let d=new Date('2023-04-03T00:00:00Z');d.toISOString().slice(0,10)<='2023-09-15';d.setUTCDate(d.getUTCDate()+1))if(![0,6].includes(d.getUTCDay()))calendar.push(d.toISOString().slice(0,10));
+ const ex='2023-07-17',bars=[],daily=[];
+ for(const date of calendar){const price=date<ex?33.87:19.71;daily.push({date,open:price,high:price,low:price,close:price,prev_close:price,volume:48000,halted:0,isST:0,knownAt:date+' 09:00',causalFactor:date<ex?1:33.87/19.71});for(const time of slots(5))bars.push({date:date+' '+time,open:price,high:price,low:price,close:price,volume:1000,halted:0});}
+ const from=calendar[0],to=calendar.at(-1);return {schemaVersion:1,metadata:{symbol:'600188',name:'模拟完整网格，非真实行情',source:'baostock',board:'main',listedDate:'1998-07-01',listingSessionOffset:5000,timeframe:'5m',priceBasis:'raw',volumeUnit:'shares',timezone:'Asia/Shanghai',timestampConvention:'bar-close',requested:{from,to},research:{from:'2023-07-03',to,warmupSessions:60},universe:'SINGLE_SECURITY',collectionPurpose:'market-data-only',coverage:Object.fromEntries(['calendar','daily','actions','factors'].map(k=>[k,{status:'complete',from,to,source:'synthetic test only'}]))},bars,daily,calendar,universe:[],factors:[],actions:[{id:'600188-2023-07-17-1',type:'dividend',announcementTime:'2023-07-10 00:00',recordDate:'2023-07-14',exDate:ex,payDate:ex,shareListDate:ex,cashPerShare:3.07,bonusPerShare:.5,cashBasis:'gross',referencePrice:19.71}]};
+}

@@ -2,6 +2,7 @@ import {auditBundle,isAuditAdmitted} from '../dist/quality.mjs';
 import {reconciliationReport} from '../dist/reconciliation.mjs';
 import {actionDiagnosticReport} from '../dist/action-diagnostics.mjs';
 import {verifyRepairSnapshot,rawBar,stable} from '../dist/minute-repair.mjs';
+import {correctOfficialActions,officialEvidence,verifyOfficialCorrections} from '../dist/corporate-correction.mjs';
 export const canonical=value=>JSON.stringify(value,(_key,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
 const fail=(code,message,details)=>{throw Object.assign(Error(message),{code,status:409,details});};
 const date=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s+'T00:00:00Z').toISOString().slice(0,10)===s;
@@ -14,7 +15,7 @@ function admit(map,key,row,label){const prior=map.get(key);if(prior&&canonical(p
 export function assembleBundles(parents,{symbol,from,to,warmupSessions=60},{verifiedRepairs=new Set()}={}){
   if(!/^[0-9]{6}$/.test(symbol??'')||!date(from)||!date(to)||from>=to||!Number.isInteger(warmupSessions)||warmupSessions<60||warmupSessions>1000)fail('ASSEMBLY_REQUEST','合并代码、日期或预热要求无效。');
   if(!parents.length)fail('ASSEMBLY_COVERAGE',`${symbol} 没有覆盖 ${from} — ${to} 的本地行情快照。请补采对应区间和预热历史。`);
-  parents=[...parents].sort((a,b)=>a.id.localeCompare(b.id));const base=parents[0].bundle.metadata;
+  parents=[...parents].sort((a,b)=>a.id.localeCompare(b.id)).map(p=>({...p,bundle:correctOfficialActions(p.bundle,p.id).bundle}));const base=parents[0].bundle.metadata;
   const primarySource=base.primarySource??base.source,overrides=new Map();
   for(const p of parents)if(p.bundle.metadata.minuteRepair){
     if(!verifiedRepairs.has(p.id))fail('ASSEMBLY_REPAIR_PROOF','修复快照必须先独立核验逐日证据，不接受未经核验的覆盖。');
@@ -52,6 +53,8 @@ export function assembleBundles(parents,{symbol,from,to,warmupSessions=60},{veri
   const hs300=parents.every(({bundle:b})=>b.metadata.universe==='HS300');
   const metadata={symbol,name:base.name??'',board:base.board,source:base.source,timeframe:'5m',listedDate:base.listedDate,priceBasis:'raw',volumeUnit:'shares',timezone:'Asia/Shanghai',timestampConvention:'bar-close',requested:range,research:{from,to,warmupSessions},universe:hs300?'HS300':'SINGLE_SECURITY',universePolicy:hs300?'weekly-asof-next-session':'not-requested',coverage:Object.fromEntries(['calendar','daily','actions','factors'].map(k=>[k,{status:'complete',from:start,to,source:'verified parent snapshots; assembled and re-audited'}])),assembly:{version:1,parents:parents.map(p=>p.id),policy:'raw-union; overlap-equality; causal chain rebuilt from chronological daily references'},provenance:{assemblerVersion:1,parents:parents.map(p=>({snapshotId:p.id,providerEvidence:p.bundle.metadata.provenance??null}))}};
   const repairs=[...overrides.values()].filter(x=>between(x.proof.date,range));if(repairs.length){metadata.source='verified-minute-repair';metadata.primarySource=primarySource;metadata.minuteRepair={version:'minute-repair-1',status:'verified',baseSnapshotId:parents.find(p=>p.bundle.metadata.minuteRepair)?.bundle.metadata.minuteRepair.baseSnapshotId,policy:'verified whole-day replacement; only matching original/replacement candles may overlap',days:repairs.map(x=>x.proof)};}
+  const correctionRecords=new Map();for(const p of parents)for(const r of p.bundle.metadata.corporateCorrections?.records??[])if(between(r.after.exDate,range)&&!correctionRecords.has(r.evidenceId))correctionRecords.set(r.evidenceId,r);
+  if(correctionRecords.size)metadata.corporateCorrections={version:officialEvidence.version,records:[...correctionRecords.values()].sort((a,b)=>a.evidenceId.localeCompare(b.evidenceId))};
   if(base.synthetic)metadata.synthetic=true;if(!hs300)metadata.collectionPurpose='market-data-only';
   // Keep the full calendar for listing age. A supplied historical offset must
   // refer to this calendar's first date, rather than to a later fragment.
@@ -64,6 +67,7 @@ export function assembleBundles(parents,{symbol,from,to,warmupSessions=60},{veri
   metadata.conflicts=parents.flatMap(p=>p.bundle.metadata.conflicts??[]).filter(d=>!d.date||between(d.date.slice(0,10),range));
   const bundle={schemaVersion:1,metadata,calendar,daily:dayRows,bars:[...bars.values()].filter(r=>between(r.date.slice(0,10),range)).sort((a,b)=>a.date.localeCompare(b.date)),actions:[...actions.values()].filter(r=>between(r.exDate,range)).sort((a,b)=>a.exDate.localeCompare(b.exDate)).map((r,i)=>({...r,id:symbol+'-'+r.exDate+'-'+i})),factors:[...factors.values()].filter(r=>between(r.dividOperateDate??r.exDate,range)).sort((a,b)=>(a.dividOperateDate??a.exDate).localeCompare(b.dividOperateDate??b.exDate)),universe:hs300?[...universe.values()].filter(r=>between(r.date,range)).sort((a,b)=>a.date.localeCompare(b.date)):[]};
   if(bundle.bars.length>120000)fail('ASSEMBLY_SIZE','合并快照超过120,000根行情，请缩小区间。');
+  verifyOfficialCorrections(bundle);
   const report=auditBundle(bundle,{scope:hs300?'hs300':'single-security'});if(!isAuditAdmitted(report)){
     const reconciliation=reconciliationReport(bundle,report,parents),actionDiagnostics=actionDiagnosticReport(bundle,report,parents),detail=reconciliation?.summary;
     const explanation=detail?`量价不一致 ${detail.failedChecks} 项，涉及 ${detail.affectedDays} 日：收盘价 ${detail.priceChecks} 项、成交量 ${detail.volumeChecks} 项${detail.openChecks||detail.highChecks||detail.lowChecks?`、开盘 ${detail.openChecks} 项、最高 ${detail.highChecks} 项、最低 ${detail.lowChecks} 项`:''}。${detail.sourceMismatchDays?`${detail.sourceMismatchDays} 日的差异在原快照中已存在。`:''}请下载量价核验报告查看日期和原始值，或在本地“分钟第二源核验 / 修复”中核验原始快照；暂不需要重复采集整段历史。`:'请核对对应日期资料。';
@@ -81,7 +85,7 @@ export async function assembleStored(bucket,input){
   const verifiedRepairs=new Set();for(const p of parents)if(p.bundle.metadata.minuteRepair){await verifyRepairSnapshot(p.bundle);verifiedRepairs.add(p.id);}
   const {bundle,report}=assembleBundles(parents,input,{verifiedRepairs}),bytes=new TextEncoder().encode(canonical(bundle));if(bytes.length>25*1024*1024)fail('ASSEMBLY_SIZE','合并快照超过25MB，请缩小区间。');
   const id=await sha256(bytes),key='manifests/'+id+'.json',existing=await bucket.get(key);if(existing){const saved=await bucket.get('snapshots/'+id+'.json');if(!saved||await sha256(new Uint8Array(await new Response(saved.body).arrayBuffer()))!==id)fail('SNAPSHOT_HASH','已保存的合并快照哈希不符。');return {...await existing.json(),report,reused:true};}
-  const m=bundle.metadata,manifest={id,symbol:m.symbol,name:m.name,board:m.board,timeframe:m.timeframe,source:m.source,research:m.research,assembly:m.assembly,...(m.minuteRepair?{minuteRepair:{baseSnapshotId:m.minuteRepair.baseSnapshotId,verifiedDays:m.minuteRepair.days.length}}:{}),syncedAt:new Date().toISOString(),bytes:bytes.length,report};
+  const m=bundle.metadata,manifest={id,symbol:m.symbol,name:m.name,board:m.board,timeframe:m.timeframe,source:m.source,research:m.research,assembly:m.assembly,...(m.corporateCorrections?{corporateCorrections:{evidenceIds:m.corporateCorrections.records.map(r=>r.evidenceId)}}:{}),...(m.minuteRepair?{minuteRepair:{baseSnapshotId:m.minuteRepair.baseSnapshotId,verifiedDays:m.minuteRepair.days.length}}:{}),syncedAt:new Date().toISOString(),bytes:bytes.length,report};
   await bucket.put('snapshots/'+id+'.json',bytes,{httpMetadata:{contentType:'application/json'}});const stored=await bucket.get('snapshots/'+id+'.json');if(!stored||await sha256(new Uint8Array(await new Response(stored.body).arrayBuffer()))!==id)fail('SNAPSHOT_HASH','合并快照写入后哈希核对失败。');
   await bucket.put(key,canonical(manifest),{httpMetadata:{contentType:'application/json'}});return manifest;
 }

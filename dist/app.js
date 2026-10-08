@@ -4,8 +4,9 @@ import {candidateLabel} from './parameter-schema.mjs';
 import {setupLLM} from './llm-ui.mjs';
 import {trafficUsageHTML} from './traffic-ui.mjs';
 import {defaults,demoData,demoMinuteData,parseCSV,backtest,compareParameters,compareManagement,managementNames,orderFees,detectTimeframe,resampleData,dailyGroups,periodLabel} from './engine.mjs';
-import {auditBundle,auditVersion} from './quality.mjs';
+import {auditBundle,auditVersion,isAuditAdmitted} from './quality.mjs';
 import {actionDiagnosticReport} from './action-diagnostics.mjs';
+import {officialCorrectionPlan} from './corporate-correction.mjs';
 import {requiredWarmupSessions} from './research-input.mjs';
 import {reconciliationReport} from './reconciliation.mjs';
 import {setupMinuteRepair} from './minute-repair-ui.mjs';
@@ -104,10 +105,29 @@ function actionDiagnosticHTML(report){
  if(!report)return '';
  return `<p class="quality-blocked"><strong>公司行动资料阻断回测；量价差异仅警告。</strong></p><p class="help">核对下列除权数值。不能靠第二分钟源、放宽量价容差或推算分红来修复。</p>${report.checks.map(c=>`<p class="help">除权 ${esc(c.exDate)} · 登记 ${esc(c.recordDate)}<br>前一交易日 ${esc(c.previousTradingDate??'缺失')} 收盘 ${num(c.previousTradingClose,4)} · 每股现金 ${num(c.cashPerShare,6)} · 每股送转 ${num(c.bonusPerShare,6)}<br>理论参考价 ${num(c.theoreticalReference,6)} · 事件参考价 ${num(c.reportedReference,6)} · 日线参考价 ${num(c.dailyReference,6)} · 差 ${num(c.difference,6)}<br>公式：（前一交易日收盘 − 每股现金）÷（1 + 每股送转）；绝对容差 0.011 元。${c.economicsStatus==='failed'?'此事件经济关系未通过。':''}</p>`).join('')}`;
 }
+function appendOfficialCorrection(el,report){
+ const plan=officialCorrectionPlan(report.symbol,report.actions),ids=(report.parents??[]).map(p=>p.snapshotId).filter(id=>/^[a-f0-9]{64}$/.test(id));
+ if(!plan.corrections.length||!ids.length)return;
+ const controls=document.createElement('div');
+ const note=document.createElement('p');note.className='help';note.textContent=plan.corrections.map(c=>`已核验公告：${c.before.exDate} 每股税前现金 ${c.before.cashPerShare} → ${c.after.cashPerShare} 元（含特别股息 ${c.evidence.specialCashPerShare} 元）。修订后重新校验；分钟量价警告保留。`).join(' ');controls.append(note);
+ const link=document.createElement('a');link.className='text-button';link.href=plan.corrections[0].evidence.localDocument;link.target='_blank';link.rel='noopener';link.textContent='查看已核验公告';controls.append(link);
+ const button=document.createElement('button');button.type='button';button.className='text-button';button.textContent='按已核验公告修复';button.onclick=async()=>{
+  const c=config(),datasetSymbol=$('#backtest-symbol').value;button.disabled=true;button.textContent='正在保存修订并重新校验…';
+  try{const saved=await api('/api/data/corporate-correction',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({snapshots:ids})});
+   let id;if(activeSnapshotId&&saved.entries.some(e=>e.originalId===activeSnapshotId))id=saved.entries.find(e=>e.originalId===activeSnapshotId).id;
+   else if(saved.entries.length===1)id=saved.entries[0].id;
+   else{const merged=await api('/api/data/assemble',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:report.symbol,from:c.from,to:c.to,warmupSessions:requiredWarmupSessions(c),snapshots:saved.entries.map(e=>e.id)})});id=merged.id;}
+   clearReconciliation();await refreshBacktestSnapshots();await loadBundle(await api('/api/data/bundle?id='+id),'公告修订后的行情',false,id);setConfig({...c,board:activeBundle.metadata.board,dataMode:bundleMode(activeBundle)});$('#backtest-symbol').value=datasetSymbol;await refreshWarehouse();
+   $('#config-status').textContent=isAuditAdmitted(qualityReport)?'公司行动修订已保存；原快照保留。点击“运行回测”重新计算。':'公司行动修订已保存；仍有其他资料问题，请查看当前数据校验。';$('#config-status').className='config-status';toast($('#config-status').textContent);
+  }catch(e){showReconciliation(e);$('#config-status').textContent=e.message;$('#config-status').className='config-status error';toast(e.message);}
+  finally{button.disabled=false;button.textContent='按已核验公告修复';}
+ };controls.append(button);el.prepend(controls);
+}
 function showActionDiagnostics(report){
  if(!report)return;
  let el=$('#backtest-actions');if(!el){el=document.createElement('div');el.id='backtest-actions';el.className='reconciliation';$('#config-status').after(el);}el.hidden=false;el.innerHTML=actionDiagnosticHTML(report);
  const button=document.createElement('button');button.type='button';button.className='text-button';button.textContent='下载公司行动核验报告';button.onclick=()=>download(report.symbol+'-公司行动核验报告.json',JSON.stringify(report,null,2),'application/json');el.append(button);
+ appendOfficialCorrection(el,report);
 }
 function showReconciliation(error){
   showActionDiagnostics(error.details?.actionDiagnostics??(activeBundle&&qualityReport?actionDiagnosticReport(activeBundle,qualityReport,activeSnapshotId?[{id:activeSnapshotId,bundle:activeBundle}]:[]):null));
@@ -125,11 +145,12 @@ function renderQuality(){
   repairUI?.context();
   const el=$('#quality-status');if(!activeBundle){el.innerHTML=source==='demo'?'<strong>合成演示 · 不属于真实行情验证</strong><p class="help">演示日历只排除周末，仅用于体验策略与成交流程。</p>':'<strong class="quality-blocked">CSV 完整性未验证</strong><p class="help">无法核对整日缺失、历史 ST、公司行动和因子。当时是否沪深 300 成分股也需独立资料。只可做探索研究。</p>';return;}
   const q=qualityReport,m=activeBundle.metadata;el.innerHTML=`<div class="quality-summary"><span class="quality-${q.status}">${esc(q.label)}</span><span>${esc(boardNames[m.board]||'板块缺失')} · ${esc(m.symbol)}</span><span>${q.completeSessions} / ${q.sessions} 个完整交易日</span><span>${q.suspendedSessions} 个已确认停牌日</span></div><p class="help">请求含预热：${esc(q.requested.from)} — ${esc(q.requested.to)}<br>实际返回：${esc(q.actual.from||'无')} — ${esc(q.actual.to||'无')} · ${num(q.actual.bars,0)} 根</p>${q.issues.length?'<ul class="quality-issues">'+q.issues.map(x=>`<li class="quality-${x.severity==='warning'?'warning':'blocked'}"><strong>${x.severity==='warning'?'警告 · 可继续回测':'阻断 · 请补齐资料'}：${esc(x.message)}（${x.count}）</strong>${x.samples.length?'<small>'+esc(x.samples.join('、'))+'</small>':''}</li>`).join('')+'</ul>':'<p>逐日网格、历史状态、独立日线与除权因子链校验通过。</p>'}<p class="help">${esc(q.warning)}</p>`;
-  const diagnostic=actionDiagnosticReport(activeBundle,q,activeSnapshotId?[{id:activeSnapshotId,bundle:activeBundle}]:[]);if(diagnostic){const block=document.createElement('div');block.innerHTML=actionDiagnosticHTML(diagnostic);el.append(block);const button=document.createElement('button');button.type='button';button.className='text-button';button.textContent='下载公司行动核验报告';button.onclick=()=>download(diagnostic.symbol+'-公司行动核验报告.json',JSON.stringify(diagnostic,null,2),'application/json');el.append(button);}
+  const diagnostic=actionDiagnosticReport(activeBundle,q,activeSnapshotId?[{id:activeSnapshotId,bundle:activeBundle}]:[]);if(diagnostic){const block=document.createElement('div');block.innerHTML=actionDiagnosticHTML(diagnostic);el.append(block);const button=document.createElement('button');button.type='button';button.className='text-button';button.textContent='下载公司行动核验报告';button.onclick=()=>download(diagnostic.symbol+'-公司行动核验报告.json',JSON.stringify(diagnostic,null,2),'application/json');el.append(button);appendOfficialCorrection(el,diagnostic);}
+  for(const r of m.corporateCorrections?.records??[]){const note=document.createElement('p');note.className='help';note.textContent=`已按公告修订 ${r.after.exDate}：每股税前现金 ${r.before.cashPerShare} → ${r.after.cashPerShare} 元；原始行情未修改。`;el.append(note);}
 }
 async function loadBundle(b,name,persist=false,snapshotId=null){
   if(!b?.bars?.length)throw Error('数据包没有可预览行情。');$('#data-mode').value=bundleMode(b);activeSnapshotId=snapshotId;importedSnapshotId=snapshotId;const q=selectedAudit(b);if(!b.bars.length)throw Error('数据包没有可预览行情。');activeBundle=b;importedBundle=b;qualityReport=q;data=b.bars;importedData=data;dataName=b.metadata.symbol+' · '+(b.metadata.name||name);importedName=dataName;source='bundle';$('#backtest-symbol').value=b.metadata.symbol;let opt=$('#dataset option[value="import"]');if(!opt){opt=document.createElement('option');opt.value='import';$('#dataset').append(opt);}opt.textContent=b.metadata.symbol+' · 已载入数据包';$('#dataset').value=snapshotId&&backtestSnapshots.has(snapshotId)?'snapshot:'+snapshotId:'import';$('#board').value=b.metadata.board||'main';$('#board').disabled=true;setImportPeriod();updateSource();renderData();renderQuality();markDirty();$('#import-status').textContent=q.label+'；'+data.length+' 根行情。';
-  if(persist){try{const saved=await api('/api/data/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});activeSnapshotId=saved.id;importedSnapshotId=saved.id;$('#import-status').textContent='已持久保存 · 快照 '+saved.id.slice(0,12)+' · '+q.label;await refreshWarehouse();await refreshBacktestSnapshots();updateSource();repairUI?.context();}catch(e){$('#import-status').textContent=e.message+' 当前文件仍在页面内，请保留本地副本。';toast(e.message);}}
+  if(persist){try{const saved=await api('/api/data/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});activeSnapshotId=saved.id;importedSnapshotId=saved.id;$('#import-status').textContent='已持久保存 · 快照 '+saved.id.slice(0,12)+' · '+q.label;await refreshWarehouse();await refreshBacktestSnapshots();updateSource();renderQuality();repairUI?.context();}catch(e){$('#import-status').textContent=e.message+' 当前文件仍在页面内，请保留本地副本。';toast(e.message);}}
 }
 function renderSnapshotOptions(){
   const select=$('#dataset'),current=select.value;select.querySelectorAll('option[data-saved-snapshot]').forEach(o=>o.remove());
@@ -148,7 +169,7 @@ async function resolveBacktestSymbol(){
   const covers=r=>r?.from<=c.from&&r?.to>=c.to;
   if(activeBundle?.metadata?.symbol===symbol&&covers(activeBundle.metadata.requested))return;
   await refreshBacktestSnapshots();
-  const matches=[...backtestSnapshots.values()].filter(x=>x.symbol===symbol&&covers(x.report?.requested)).sort((a,b)=>Number(!!b.minuteRepair)-Number(!!a.minuteRepair)||Number(b.report?.status==='passed')-Number(a.report?.status==='passed')||b.syncedAt.localeCompare(a.syncedAt));
+  const matches=[...backtestSnapshots.values()].filter(x=>x.symbol===symbol&&covers(x.report?.requested)).sort((a,b)=>Number(isAuditAdmitted(b.report))-Number(isAuditAdmitted(a.report))||Number(!!b.minuteRepair)-Number(!!a.minuteRepair)||Number(!!b.corporateCorrections)-Number(!!a.corporateCorrections)||b.syncedAt.localeCompare(a.syncedAt));
   let id=matches[0]?.id;
   if(!id){
     const warmupSessions=requiredWarmupSessions(c),lookback=new Date(Date.parse(c.from+'T00:00:00Z')-Math.max(365,warmupSessions*4)*86400000).toISOString().slice(0,10);

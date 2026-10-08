@@ -13,14 +13,14 @@ const error=(code,message,status=409)=>Object.assign(Error(message),{code,status
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 // Reviewed previous version used identical immutable source responses and raw
 // bar semantics. Recovery still validates its request, parent and evidence.
-const compatibleRepairs=new Set(['5b96eb04c4967c73c285189ffa3fdc6ada2a17a010ce7e003a2bc8d0ffb233ff']);
+const compatibleRepairs=new Set(['8e8916f5d794a1becf21bd1bf61691831a1f2616d75be9664dbf85ca51afa7c2','5b96eb04c4967c73c285189ffa3fdc6ada2a17a010ce7e003a2bc8d0ffb233ff']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:stable(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 
 export class MinuteRepairManager {
   constructor({root,bucket,python,collector,archiver,clock=Date.now,heartbeatMs=5000}={}){this.root=root;this.bucket=bucket;this.python=python;this.collector=collector;this.archiver=archiver;this.clock=clock;this.heartbeatMs=heartbeatMs;this.jobs=new Map();this.writes=Promise.resolve();this.active=null;this.stopping=false;}
   location(id,name){if(!/^[a-f0-9]{24}$/.test(id))throw error('REPAIR_NOT_FOUND','核验任务不存在',404);return path.join(this.root,id,name);}
   async init(){
-    await mkdir(this.root,{recursive:true});this.fingerprint=hash((await Promise.all(['server/minute-repair.mjs','dist/minute-repair.mjs','dist/quality.mjs','dist/data.mjs','collector/minute_repair.py','collector/repair_archive.py','collector/sources.py','collector/query_cache.py','collector/parquet_store.py'].map(p=>readFile(path.join(project,p))))).map(hash).join('|'));
+    await mkdir(this.root,{recursive:true});this.fingerprint=hash((await Promise.all(['server/minute-repair.mjs','dist/minute-repair.mjs','dist/quality.mjs','dist/data.mjs','collector/minute_repair.py','collector/repair_archive.py','collector/sources.py','collector/query_cache.py','collector/parquet_store.py','dist/corporate-correction.mjs','dist/corporate-evidence.json'].map(p=>readFile(path.join(project,p))))).map(hash).join('|'));
     for(const id of await readdir(this.root)){if(!/^[a-f0-9]{24}$/.test(id))continue;try{const j=JSON.parse(await readFile(this.location(id,'state.json'),'utf8'));const request=await readFile(this.location(id,'request.json'));if(j.id!==id||hash(request)!==j.requestHash)throw Error('核验请求哈希不符');j.request=JSON.parse(request);ensureTiming(j);if(j.status==='running'){stopTiming(j,this.clock(),'interrupted',{recovered:true});j.status='paused';}this.jobs.set(id,j);}catch(e){this.jobs.set(id,{id,status:'blocked',stage:'recovery',createdAt:new Date(this.clock()).toISOString(),events:[],error:{code:'REPAIR_INTEGRITY',message:e.message}});}}
     this.pump();return this;
   }

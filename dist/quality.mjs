@@ -1,7 +1,8 @@
 import {slots,dayOf,detectTimeframe} from './data.mjs';
 import {boardNames} from './rules.mjs';
+import {verifyOfficialCorrections} from './corporate-correction.mjs';
 const validDate=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s;
-export const auditVersion='3.4';
+export const auditVersion='3.5';
 const warningCodes=new Set(['DAILY_CROSSCHECK','DAILY_OHLC_CROSSCHECK']);
 export const isAuditAdmitted=report=>['passed','warning'].includes(report?.status);
 export function auditDisposition(issues){
@@ -13,6 +14,7 @@ export function auditBundle(b,{scope='hs300'}={}){
   const issues=[],add=(code,message,count=1,samples=[])=>issues.push({code,message,count,samples:samples.slice(0,15),severity:warningCodes.has(code)?'warning':'error'});
   if(!b||b.schemaVersion!==1||!Array.isArray(b.bars))throw Error('需要 schemaVersion=1 的完整数据包。');
   const bars=b.bars,m=b.metadata??{},range=m.requested??{},daily=b.daily??[],calendar=b.calendar??[],actions=b.actions??[];
+  try{verifyOfficialCorrections(b);}catch(e){add('ACTION_CORRECTION_PROOF','公司行动公告修订证据不符：'+e.message);}
   if(!bars.length)add('EMPTY','没有行情');
   if(!boardNames[m.board])add('BOARD','缺少显式历史板块');
   if(!/^[0-9]{6}$/.test(m.symbol??''))add('SYMBOL','证券代码应为六位数字');
