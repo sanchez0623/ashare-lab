@@ -38,7 +38,7 @@ function readBody(req){return new Promise((resolve,reject)=>{let size=0,chunks=[
 export async function loadBuiltWorker(root=projectRoot){
   const entry=path.join(root,'dist/server/index.js');
   try{await stat(entry);}catch(e){
-    if(e.code==='ENOENT')throw Object.assign(Error('缺少构建文件：'+entry+'。请解压完整部署包，或先运行 npm ci 和 npm run build。'),{code:'BUILD_MISSING'});
+    if(e.code==='ENOENT')throw Object.assign(Error('缺少构建文件：'+entry+'。请先运行 npm ci 和 npm run build:app，或使用 npm start 自动构建。'),{code:'BUILD_MISSING'});
     throw Object.assign(Error('无法访问后台构建文件：'+entry+'（'+e.code+'）'),{code:'BUILD_ACCESS_FAILED',cause:e});
   }
   let worker;
@@ -48,32 +48,40 @@ export async function loadBuiltWorker(root=projectRoot){
   if(typeof worker?.fetch!=='function')throw Object.assign(Error('后台构建文件入口无效：'+entry+'；需要导出可调用的 fetch。'),{code:'BUILD_ENTRY_INVALID'});
   return worker;
 }
-export async function startLocal({port=8080,dataDir=path.join(projectRoot,'.local-data'),assetsDir=path.join(projectRoot,'dist/client'),worker,researchOptions={},repairOptions={},llmOptions={},corporateOptions={}}={}){
+export async function startLocal({port=8080,dataDir=path.join(projectRoot,'.local-data'),assetsDir=path.join(projectRoot,'dist/client'),worker,researchOptions={},repairOptions={},llmOptions={},corporateOptions={},runtimeInfo={enabled:false}}={}){
   if(!worker)worker=await loadBuiltWorker();
   await mkdir(dataDir,{recursive:true});const env={BUCKET:new FileBucket(path.join(dataDir,'warehouse')),ASSETS:fileAssets(assetsDir)};
   const research=await new ResearchManager({...researchOptions,root:path.join(dataDir,'research'),bucket:env.BUCKET}).init();
   env.CORPORATE_ARCHIVER=corporateOptions.archiver??(bundle=>archiveCorporateCorrection(bundle,{python:()=>research.python(),root:path.join(dataDir,'research')}));
   let repairs;try{repairs=await new MinuteRepairManager({...repairOptions,root:path.join(dataDir,'research','minute-repairs'),bucket:env.BUCKET,python:()=>research.python()}).init();}catch(e){await research.close();throw e;}
   let llm;try{llm=await new LocalLLM({...llmOptions,root:path.join(dataDir,'llm')}).init();}catch(e){await Promise.all([research.close(),repairs.close()]);throw e;}
+  let closing=false,shutdownPromise,localRuntime={...runtimeInfo},inFlight=0,boundPort=port;const waiters=[];
   const server=http.createServer(async(req,res)=>{
-    const localPort=server.address().port,host=req.headers.host?.toLowerCase();
+    const localPort=server.address()?.port??boundPort,host=req.headers.host?.toLowerCase();
     if(![`127.0.0.1:${localPort}`,`localhost:${localPort}`].includes(host)){res.writeHead(403,{'content-type':'text/plain; charset=utf-8'});res.end('只接受本机访问');return;}
+    inFlight++;
     try{
+      if(closing){res.writeHead(503,{'content-type':'application/json; charset=utf-8','retry-after':'2'});res.end(JSON.stringify({code:'LOCAL_RELOADING',error:'后台正在保存断点并重载，请稍后重试'}));return;}
       if(!['GET','HEAD','POST'].includes(req.method)){res.writeHead(405);res.end();return;}
       const body=['GET','HEAD'].includes(req.method)?undefined:await readBody(req);
       const request=new Request(new URL(req.url,'http://'+host),{method:req.method,headers:req.headers,body});
       const pathname=new URL(request.url).pathname;
-      const response=await (pathname.startsWith('/api/llm/')?llm.fetch(request):pathname.startsWith('/api/research/repairs')?repairs.fetch(request):pathname.startsWith('/api/research/')?research.fetch(request):worker.fetch(request,env));res.writeHead(response.status,Object.fromEntries(response.headers));
+      const response=pathname==='/api/local/status'&&request.method==='GET'?new Response(JSON.stringify({backend:'local',...localRuntime}),{headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}}):await (pathname.startsWith('/api/llm/')?llm.fetch(request):pathname.startsWith('/api/research/repairs')?repairs.fetch(request):pathname.startsWith('/api/research/')?research.fetch(request):worker.fetch(request,env));res.writeHead(response.status,Object.fromEntries(response.headers));
       if(response.body&&req.method!=='HEAD')Readable.fromWeb(response.body).pipe(res);else res.end();
     }catch(e){res.writeHead(e.status??500,{'content-type':'application/json; charset=utf-8','connection':'close'});res.end(JSON.stringify({error:e.status?e.message:'本地服务处理失败，请检查启动窗口日志'}));if(!e.status)console.error(e.message);}
+    finally{if(--inFlight===0)for(const resolve of waiters.splice(0))resolve();}
   });
-  const close=server.close.bind(server);server.close=callback=>{Promise.all([repairs.close(),research.close()]).then(()=>close(callback),e=>callback?.(e));return server;};server.research=research;server.repairs=repairs;server.llm=llm;
-  try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});}catch(e){await Promise.all([repairs.close(),research.close()]);throw e;}return server;
+  const close=server.close.bind(server);
+  server.shutdown=({reload=false}={})=>{if(!shutdownPromise){closing=true;const drained=new Promise((resolve,reject)=>close(e=>e?reject(e):resolve())),handlersDone=inFlight?new Promise(resolve=>waiters.push(resolve)):Promise.resolve();shutdownPromise=Promise.all([drained,handlersDone]).then(async()=>{await repairs.close({reload});await research.close({reload});});}return shutdownPromise;};
+  server.close=callback=>{server.shutdown().then(()=>callback?.(),e=>callback?.(e));return server;};
+  server.updateRuntime=({assetsDir:nextAssets,info={}}={})=>{if(nextAssets)env.ASSETS=fileAssets(nextAssets);localRuntime={...localRuntime,...info};};
+  server.research=research;server.repairs=repairs;server.llm=llm;
+  try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});boundPort=server.address().port;}catch(e){await Promise.all([repairs.close(),research.close()]);throw e;}return server;
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const major=Number(process.versions.node.split('.')[0]);if(major<22){console.error('需要 Node.js 22 或更高版本，推荐 Node.js 24 LTS。');process.exit(1);}
-  const options={};for(let i=2;i<process.argv.length;i++){const key=process.argv[i];if(key==='--port')options.port=Number(process.argv[++i]);else if(key==='--data-dir')options.dataDir=path.resolve(process.argv[++i]);else{console.error('用法：node scripts/local-server.mjs [--port 8080] [--data-dir 路径]');process.exit(1);}}
-  if(options.port!==undefined&&(!Number.isInteger(options.port)||options.port<1||options.port>65535)){console.error('端口需为 1–65535 的整数');process.exit(1);}
-  try{const server=await startLocal(options);console.log('青衡本地回测系统已启动：http://127.0.0.1:'+server.address().port);console.log('行情、任务与报告保存于：'+path.resolve(options.dataDir??path.join(projectRoot,'.local-data')));console.log('行情数据页可提交单股5分钟采集与回测，支持一年或自定义日期。关闭网页不中断；Ctrl+C保存断点。');let closing=false;const stop=()=>{if(closing)return;closing=true;server.close(()=>process.exit(0));};process.on('SIGINT',stop);process.on('SIGTERM',stop);}
+  const options={};for(let i=2;i<process.argv.length;i++){const key=process.argv[i];if(key==='--port')options.port=Number(process.argv[++i]);else if(key==='--data-dir')options.dataDir=path.resolve(process.argv[++i]);else if(key==='--assets-dir')options.assetsDir=path.resolve(process.argv[++i]);else{console.error('用法：node scripts/local-server.mjs [--port 8080] [--data-dir 路径]');process.exit(1);}}
+  if(options.port!==undefined&&(!Number.isInteger(options.port)||options.port<(process.send?0:1)||options.port>65535)){console.error('端口需为 1–65535 的整数');process.exit(1);}
+  try{if(process.env.ASHARE_WATCH_REVISION)options.runtimeInfo={enabled:true,revision:process.env.ASHARE_WATCH_REVISION,state:'ready'};const server=await startLocal(options);console.log('青衡本地回测系统已启动：http://127.0.0.1:'+server.address().port);console.log('行情、任务与报告保存于：'+path.resolve(options.dataDir??path.join(projectRoot,'.local-data')));console.log('行情数据页可提交单股5分钟采集与回测，支持一年或自定义日期。关闭网页不中断；Ctrl+C保存断点。');let closing=false;const stop=async(reload=false)=>{if(closing)return;closing=true;try{await server.shutdown({reload});process.exit(0);}catch(e){console.error('保存断点失败：'+e.message);process.exit(1);}};process.on('SIGINT',()=>stop());process.on('SIGTERM',()=>stop());process.on('message',message=>{if(message?.type==='runtime'){server.updateRuntime(message);process.send?.({type:'applied',id:message.id});}else if(message?.type==='reload')stop(true);else if(message?.type==='stop')stop();});process.send?.({type:'ready',port:server.address().port});}
   catch(e){console.error(e.code==='EADDRINUSE'?'端口已占用，可运行：node scripts/local-server.mjs --port 8081':e.message);process.exit(1);}
 }

@@ -6,36 +6,53 @@
 
 本版新增“组合回测”：输入多个代码、日期、策略及入场组合方式与最大持仓数，即可用同一资金账户回测已采集快照。完整组合报告保存在 `.local-data/warehouse/portfolio-reports/`，与行情及后台任务一起备份。更新需替换完整源码和构建输出，保留原 `.local-data`、`collector/.venv` 和本地密钥配置。
 
-## 从GitHub拉取更新
+## 从GitHub拉取更新与自动重载
 
-后续直接更新GitHub `main`，不再提供新的部署包。停止本地服务，在源码仓库目录执行：
+后续直接更新GitHub `main`，不再提供新的部署包。第一次切换到本版，在源码仓库目录执行：
 
 ```powershell
 git pull origin main
 npm ci
-npm run build:app
-.\start-local.cmd
 ```
 
-`build:app` 构建网页、后台和HTML说明书，不打包ZIP。首次安装开发依赖须执行 `npm ci`；只拉源码而未重新构建，启动时仍会加载旧界面和后台。保留 `.local-data`、`collector/.venv` 及本地密钥配置，旧行情与报告无需重采。
+随后在旧服务窗口按 `Ctrl+C` 正常保存断点，重新运行 `start-local.cmd`。这一次重启是为了让旧服务加载自动更新监测器。保留 `.local-data`、`collector/.venv` 和本地密钥配置。
+
+以后保持服务打开，在另一个终端执行：
+
+```powershell
+git pull origin main
+```
+
+默认启动入口现在会监测源码变化，文件稳定后自动校验、构建，不需要另跑 `npm run build:app`。普通页面和样式更新只切换前端资源，不中断采集；已打开网页会出现“刷新加载新版本”，保存页面参数/报告后点击。浏览器中的回测与调参会因刷新结束，后台采集继续。
+
+后台代码更新先停止接收请求、等待在途HTTP请求完成，再保存采集/分钟修复断点，停止旧后台并启动固定新版本。只自动恢复因本次重载暂停且版本兼容的任务；手动暂停、暂停整批、受阻或失败的任务不会自动重试。累计耗时保留，停机不计时，未完成查询重新请求，已验证检查点复用。未知采集实现、引擎或SDK版本变化仍可能阻止恢复，必须按错误提示处理，不绕过版本校验。
+
+代码校验/构建失败时继续使用上一个可用版本；后台启动失败会尝试回退旧版本，断点仍保留并重新检查兼容性。后台不是不停机替换函数，会有短暂连接中断；请在恢复后重试未确认的请求，不重复创建采集批次。
+
+依赖清单改变需自行运行 `npm ci` 或安装新的Python依赖，并重启一次；监测器自身更新和环境变量变化也需重启。自动更新不会自行安装依赖、拉取GitHub或升级SDK。监测器生成的固定运行副本在 `.local-data/runtime/`，不包含本地密钥/虚拟环境/行情，正常退出会清理；行情、任务和报告仍在原数据目录。
 
 ## 1. 安装并启动网页
 
-在已发布网站的“行情数据”页点击“下载完整本地部署包”，保存 `ashare-lab-local.zip`。也可访问网站根地址下的 `/ashare-lab-local.zip`，需要登录拥有该私有网站的账号。包内 `LOCAL_DEPLOY.md` 是这份说明；Python环境、行情仓库和网站密钥不随包下载。
+推荐从源码安装：
 
-安装 [Node.js 24 LTS](https://nodejs.org/en/download)（最低22），解压到有写权限的文件夹，例如 `D:\ashare-lab-local` 或用户文档目录。安装 Node 后重新打开终端。
+```powershell
+git clone https://github.com/sanchez0623/ashare-lab.git
+cd ashare-lab
+npm ci
+.\start-local.cmd
+```
 
-- Windows：双击 `start-local.cmd`，保持打开启动窗口。
-- macOS / Linux：在解压目录运行 `bash start-local.sh`。
-- 各平台也可运行 `node scripts/local-server.mjs` 或 `npm start`。
+安装 [Node.js 24 LTS](https://nodejs.org/en/download)（最低22）。项目目录需要写权限，安装Node后重新打开终端。默认自动更新模式需要 `npm ci` 安装构建工具，不要求先有Python；真实采集再安装第2节的Python环境。
 
-浏览器打开 **http://127.0.0.1:8080**。部署包已有构建输出，第一次启动无需 `npm install`、Python 或云平台账号。默认演示为合成行情，不是历史盈利证明。按 Ctrl+C 停止；重新启动会保留行情、任务、检查点和完整报告。
+- Windows：双击 `start-local.cmd`，保持启动窗口打开；可以传入 `--port 8081` 或 `--data-dir D:\ashare-data`。
+- macOS/Linux：运行 `bash start-local.sh`。
+- 各平台：`npm start`，指定端口可用 `npm start -- --port 8081`。
 
-端口占用时：`node scripts/local-server.mjs --port 8081`，然后访问 http://127.0.0.1:8081。
+浏览器打开 **http://127.0.0.1:8080**。按Ctrl+C正常停止；正常停止后原运行任务保持暂停，需要在网页恢复。默认演示为合成行情，不是历史盈利证明。
 
-旧版 Windows 启动时可能把模块加载失败误报为“缺少构建文件”，即使 `dist/server/index.js` 已存在。当前版已改用文件URL加载并保留实际错误原因。升级时将新包中的 `scripts/local-server.mjs` 覆盖到旧项目同名文件，再双击 `start-local.cmd`；保留旧项目的 `.local-data` 和 `collector/.venv`。如果新提示确实为缺少文件，检查是否完整解压到包含 `dist` 与 `scripts` 的同一目录。
+需要固定版本、暂时关闭自动更新时，先运行 `npm run build:app`，再用 `npm run start:fixed`（即 `node scripts/local-server.mjs`）。`build:app` 只构建应用与HTML手册，不生成ZIP；构建校验失败保留此前构建。旧部署包未安装npm依赖时也可使用已经构建的固定版本入口。
 
-服务只监听本机127.0.0.1，不提供局域网共享或公网登录。不要把它直接通过隧道、反向代理公开；多人服务需要另做鉴权。Windows / macOS 启动脚本已提供；本次实际启动与浏览器验收在 Linux / Node.js 24 上完成。
+服务只监听本机127.0.0.1，同一数据目录禁止两个任务调度器并发。Windows路径、参数转发已处理；本次自动构建、后台进程重载和浏览器验收在Linux/Node.js 24上完成。
 
 ### 1.1 代理/VPN与监控IP
 
@@ -47,12 +64,12 @@ npm run build:app
 
 ## 2. 安装 Python 采集环境
 
-安装 [Python 3.12](https://www.python.org/downloads/)（最低3.10）。Windows安装时勾选添加到 PATH；命令示例使用 `py` 启动器，无需激活 PowerShell 虚拟环境。进入项目目录。
+安装 [Python 3.12](https://www.python.org/downloads/)（最低3.10）。Windows安装时勾选添加到 PATH；命令示例使用已加入PATH的 `python`，无需激活 PowerShell 虚拟环境。进入项目目录。
 
 Windows PowerShell / 命令提示符：
 
 ```powershell
-py -3 -m venv collector/.venv
+python -m venv collector/.venv
 collector\.venv\Scripts\python.exe -m pip install -r collector/requirements.txt
 ```
 

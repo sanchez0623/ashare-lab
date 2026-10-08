@@ -1,3 +1,4 @@
+import {setupLocalUpdates} from './local-update.mjs';
 import {parseCollectionCodes} from './collection-batch.mjs';
 import {setupOptimization} from './optimization-ui.mjs';
 import {setupPortfolio} from './portfolio-ui.mjs';
@@ -324,3 +325,4 @@ $('#lixinger-probe').onclick=async()=>{const button=$('#lixinger-probe');button.
 $('#local-package-download').hidden=['localhost','127.0.0.1'].includes(location.hostname);
 
 refreshBacktestSnapshots();
+setupLocalUpdates();

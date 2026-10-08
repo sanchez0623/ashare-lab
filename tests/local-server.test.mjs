@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,writeFile,mkdir,copyFile} from 'node:fs/promises';
+import {mkdtemp,rm,writeFile,mkdir,copyFile,access} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
@@ -28,6 +28,15 @@ test('local deployment serves UI and persists exact warehouse snapshots across r
   assert.equal(await fetchStatus(url+'/%2e%2e%2fpackage.json'),403);
   assert.equal(await fetchStatus(url+'/api/data/ingest',{method:'POST',headers:{'content-type':'application/json'},body:'x'.repeat(25*1024*1024+1)}),413);
  }finally{if(server)await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true});}
+});
+test('reload waits for an in-flight handler even if its HTTP client disconnects',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'ashare-local-drain-'));let server,entered,release,closed=false;const started=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+ try{
+  server=await startLocal({port:0,dataDir:dir,worker:{fetch:async()=>{entered();await gate;return new Response('done');}}});
+  const client=http.get('http://127.0.0.1:'+server.address().port+'/slow');client.on('error',()=>{});await started;client.destroy();
+  const closing=server.shutdown({reload:true}).then(()=>closed=true);await new Promise(r=>setTimeout(r,50));assert.equal(closed,false);await access(path.join(dir,'research/.controller-lock/owner.json'));
+  release();await closing;assert.equal(closed,true);await assert.rejects(access(path.join(dir,'research/.controller-lock/owner.json')),e=>e.code==='ENOENT');server=null;
+ }finally{release?.();if(server)await server.shutdown();await rm(dir,{recursive:true,force:true});}
 });
 test('built runtime imports from a path with spaces, Chinese characters and URL delimiters',async()=>{
  const dir=await mkdtemp(path.join(tmpdir(),'ashare-import-'));const root=path.join(dir,'研究系统 #预算 % 文件');

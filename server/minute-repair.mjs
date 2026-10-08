@@ -13,7 +13,7 @@ const error=(code,message,status=409)=>Object.assign(Error(message),{code,status
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 // Reviewed previous version used identical immutable source responses and raw
 // bar semantics. Recovery still validates its request, parent and evidence.
-const compatibleRepairs=new Set(['7fbcd5cbeea79d6a875ecbb7899267c0e54e59a1fc78faca63fb2cdf5dbdf945','8e8916f5d794a1becf21bd1bf61691831a1f2616d75be9664dbf85ca51afa7c2','5b96eb04c4967c73c285189ffa3fdc6ada2a17a010ce7e003a2bc8d0ffb233ff']);
+const compatibleRepairs=new Set(['fcf9690c241cbc523f91d96b99de572fc9dd74d8f721e7aaf3fb16ff75d7e588','7fbcd5cbeea79d6a875ecbb7899267c0e54e59a1fc78faca63fb2cdf5dbdf945','8e8916f5d794a1becf21bd1bf61691831a1f2616d75be9664dbf85ca51afa7c2','5b96eb04c4967c73c285189ffa3fdc6ada2a17a010ce7e003a2bc8d0ffb233ff']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:stable(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 
 export class MinuteRepairManager {
@@ -22,6 +22,11 @@ export class MinuteRepairManager {
   async init(){
     await mkdir(this.root,{recursive:true});this.fingerprint=hash((await Promise.all(['server/minute-repair.mjs','dist/minute-repair.mjs','dist/quality.mjs','dist/data.mjs','collector/minute_repair.py','collector/repair_archive.py','collector/sources.py','collector/query_cache.py','collector/parquet_store.py','dist/corporate-correction.mjs','dist/corporate-evidence.json'].map(p=>readFile(path.join(project,p))))).map(hash).join('|'));
     for(const id of await readdir(this.root)){if(!/^[a-f0-9]{24}$/.test(id))continue;try{const j=JSON.parse(await readFile(this.location(id,'state.json'),'utf8'));const request=await readFile(this.location(id,'request.json'));if(j.id!==id||hash(request)!==j.requestHash)throw Error('核验请求哈希不符');j.request=JSON.parse(request);ensureTiming(j);if(j.status==='running'){stopTiming(j,this.clock(),'interrupted',{recovered:true});j.status='paused';}this.jobs.set(id,j);}catch(e){this.jobs.set(id,{id,status:'blocked',stage:'recovery',createdAt:new Date(this.clock()).toISOString(),events:[],error:{code:'REPAIR_INTEGRITY',message:e.message}});}}
+    for(const j of this.jobs.values())if(j.reloadResume&&j.status==='paused'){
+      delete j.reloadResume;
+      if(j.fingerprint===this.fingerprint||compatibleRepairs.has(j.fingerprint)){j.status='queued';delete j.error;await this.save(j,'代码自动重载后恢复兼容核验任务；已保存证据与累计耗时保留');}
+      else{j.status='blocked';j.error={code:'REPAIR_VERSION',message:'自动重载后核验版本不兼容，保留原始证据；请创建新核验任务'};await this.save(j,j.error.message);}
+    }
     this.pump();return this;
   }
   view(j){const {controller,...state}=j;return {...state,timing:timingView(j,this.clock())};}
@@ -82,7 +87,7 @@ export class MinuteRepairManager {
   async resume(id){const j=this.jobs.get(id);if(!j?.request||!['blocked','paused'].includes(j.status))throw error('REPAIR_STATE','只有受阻或暂停任务可恢复');if(j.fingerprint!==this.fingerprint&&!compatibleRepairs.has(j.fingerprint))throw error('REPAIR_VERSION','核验实现已变更，请从原快照创建新版本任务');j.status='queued';await this.save(j,'恢复已固定的原快照与响应检查点；累计耗时继续计时');this.pump();return this.view(j);}
   async report(id){const j=this.jobs.get(id);if(!j?.reportHash||!/^[a-f0-9]{64}$/.test(j.reportHash))throw error('REPAIR_NOT_FOUND','报告尚未生成',404);const bytes=await readFile(this.location(id,'reports/'+j.reportHash+'.json'));if(hash(bytes)!==j.reportHash)throw error('REPAIR_HASH','核验报告哈希不符');return bytes;}
   async verify(id){const j=this.jobs.get(id);if(!j?.snapshotId||j.status!=='completed')throw error('REPAIR_STATE','仅完成的修复快照可复现核验');const {bundle}=await this.snapshot(j.snapshotId);await verifyRepairSnapshot(bundle);const report=auditBundle(bundle,{scope:repairScope(bundle)});if(report.status!=='passed')throw error('REPAIR_ADMISSION','固定修复快照未通过完整校验');return {status:'passed',snapshotId:j.snapshotId,report,noMarketRequests:true};}
-  async close(){this.stopping=true;if(this.active){this.active.controller.abort();await this.running;}await this.writes;}
+  async close({reload=false}={}){this.stopping=true;const active=this.active,running=this.running;if(active){if(reload){active.reloadResume=true;await this.save(active,'代码更新：保存核验断点，重载后只恢复兼容任务');}active.controller?.abort();await running;}await this.writes;}
   async fetch(request){
     const url=new URL(request.url),base='/api/research/repairs';try{
       if(request.method==='POST'){if(request.headers.get('origin')&&request.headers.get('origin')!==url.origin)return reply({error:'只接受本站写入'},403);if(!request.headers.get('content-type')?.startsWith('application/json'))return reply({error:'需要JSON参数'},415);}

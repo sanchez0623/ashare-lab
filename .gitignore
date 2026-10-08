@@ -12,6 +12,7 @@ collector/output/
 .env.*
 
 .local-data/
+.local-build-*/
 collector/store/
 collector/universe-cache/
 *.zip

@@ -53,3 +53,6 @@ body{font-size:1rem}.config-content label,.section-label{font-size:.875rem}.two-
 
 .traffic-settings{margin:12px 0;max-width:640px}.traffic-settings>label{display:block;margin-bottom:8px}.traffic-settings-actions{display:flex;align-items:center;gap:12px}.traffic-settings-actions input{min-width:0;flex:1;height:44px;padding:0 12px;border:1px solid #dbe3df;border-radius:6px}.traffic-settings-actions button{flex:none;min-height:44px}.traffic-settings .help{margin-top:8px}
 @media(max-width:560px){.traffic-settings-actions{flex-direction:column;align-items:stretch}.traffic-settings-actions input{flex:none;width:100%}.traffic-settings-actions button{width:100%}}
+.local-update-banner{position:fixed;z-index:1500;bottom:18px;left:50%;transform:translateX(-50%);width:min(760px,calc(100% - 32px));box-sizing:border-box;display:flex;align-items:center;gap:16px;padding:14px 18px;border:1px solid #c2ded9;border-radius:10px;background:#f3fbf8;color:#254b48;box-shadow:0 5px 22px #193e3b22;font-size:14px;line-height:1.6}
+.local-update-banner[hidden]{display:none}.local-update-banner button{flex:none;padding:8px 12px;border:1px solid #3c8981;border-radius:6px;background:#3c8981;color:#fff;cursor:pointer;white-space:nowrap}
+@media(max-width:600px){.local-update-banner{align-items:flex-start;flex-direction:column;gap:10px}}
