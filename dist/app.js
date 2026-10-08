@@ -312,7 +312,12 @@ async function refreshSources(){
   }catch(e){$('#sources-status').textContent=e.message;}finally{button.disabled=false;}
 }
 $('#sources-refresh').onclick=()=>refreshSources();refreshSources();
-$('#traffic-check').onclick=async()=>{const button=$('#traffic-check');button.disabled=true;$('#traffic-status').textContent='正在查询监控 IP 和本机用量，保留已有预算；不调用 BaoStock SDK。';try{const usage=await api('/api/research/traffic',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});$('#traffic-status').innerHTML=trafficUsageHTML(usage);}catch(e){$('#traffic-status').textContent=e.message;}finally{button.disabled=false;}};
+function showTrafficUsage(usage){
+  $('#traffic-status').innerHTML=trafficUsageHTML(usage);const settings=usage.monitorSettings;
+  if(settings){$('#traffic-monitor-ip').value=settings.declaredIP||'';$('#traffic-settings-help').textContent=settings.environmentOverride?'环境变量 BS_MONITOR_IP 当前优先；网页设置会保存，但需清除该环境变量并重启后才能使用。':'设置已保存在本地，立即用于后续请求的监控；不会改变BaoStock连接、日预算或黑名单。';}
+}
+$('#traffic-check').onclick=async()=>{const button=$('#traffic-check');button.disabled=true;$('#traffic-status').textContent='正在刷新HTTP候选 IP和本机用量，不调用BaoStock SDK、不重置预算。';try{const usage=await api('/api/research/traffic',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({force:true})});showTrafficUsage(usage);}catch(e){$('#traffic-status').textContent=e.message;}finally{button.disabled=false;}};
+$('#traffic-settings-form').onsubmit=async event=>{event.preventDefault();const button=$('#traffic-save');button.disabled=true;try{const usage=await api('/api/research/traffic/settings',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({monitorIP:$('#traffic-monitor-ip').value.trim()})});showTrafficUsage(usage);toast('监控设置已保存；原有预算和已完成分段保留。');}catch(e){$('#traffic-status').textContent=e.message;}finally{button.disabled=false;}};
 $('#lixinger-probe').onclick=async()=>{const button=$('#lixinger-probe');button.disabled=true;try{const v=await api('/api/sources/lixinger/probe',{method:'POST'});await refreshSources();toast(v.ok?'理杏仁日线验证通过'+(v.cached?'（缓存）':''):'理杏仁验证未通过：'+v.code);}catch(e){toast(e.message);}finally{button.disabled=false;}};
 
 // The extracted local bundle omits the downloadable archive to avoid nesting.

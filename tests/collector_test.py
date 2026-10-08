@@ -50,6 +50,37 @@ class CollectTests(unittest.TestCase):
       with self.assertRaises(RuntimeError) as e:rs.next()
       self.assertEqual(e.exception.code,'PROVIDER_RESPONSE_INCOMPLETE');self.assertEqual(remote.call_count,1)
      finally:restore();guard.close()
+ def test_sdk_eof_stops_immediately_and_records_login_phase_and_one_request(self):
+  import baostock.util.socketutil as sock
+  from baostock.common import contants as cons
+  from baostock.data import messageheader
+  class ClosedSocket:
+   def __init__(self):self.sent=[];self.reads=0
+   def sendall(self,data):self.sent.append(data)
+   def recv(self,size):self.reads+=1;return b''
+  connection=ClosedSocket()
+  with tempfile.TemporaryDirectory() as root,patch.object(sock.context,'default_socket',connection,create=True):
+   guard=TrafficGuard(pathlib.Path(root)/'budget.db');restore=install(guard)
+   try:
+    with self.assertRaises(RuntimeError) as caught:sock.send_msg(messageheader.to_message_header(cons.MESSAGE_TYPE_LOGIN_REQUEST,0))
+    self.assertEqual(caught.exception.code,'PROVIDER_RESPONSE_INCOMPLETE');self.assertEqual(caught.exception.details['requestStage'],'登录');self.assertEqual(caught.exception.details['transportReason'],'peer-closed')
+    self.assertEqual(connection.reads,1);self.assertEqual(len(connection.sent),1);self.assertTrue(connection.sent[0].endswith(b'\n'));self.assertIs(sock.context.default_socket,connection);self.assertEqual(guard.session_requests,1)
+   finally:restore();guard.close()
+ def test_sdk_retains_protocol_decoding_for_fragmented_complete_response(self):
+  import baostock.util.socketutil as sock
+  from baostock.common import contants as cons
+  from baostock.data import messageheader
+  body='0'+cons.MESSAGE_SPLIT+'success';response=messageheader.to_message_header(cons.MESSAGE_TYPE_LOGIN_REQUEST,len(body))+body+'<![CDATA[]]>\n'
+  class CompleteSocket:
+   def __init__(self):self.sent=[];self.parts=iter([response[:9].encode(),response[9:].encode()])
+   def sendall(self,data):self.sent.append(data)
+   def recv(self,size):return next(self.parts)
+  connection=CompleteSocket()
+  with tempfile.TemporaryDirectory() as root,patch.object(sock.context,'default_socket',connection,create=True):
+   guard=TrafficGuard(pathlib.Path(root)/'budget.db');restore=install(guard)
+   try:
+    self.assertEqual(sock.send_msg('fixture-query'),response);self.assertEqual(guard.session_requests,1);self.assertEqual(connection.sent,[b'fixture-query\n']);self.assertIs(sock.context.default_socket,connection)
+   finally:restore();guard.close()
  def test_repeated_minutes_are_idempotent_and_revisions_quarantined(self):
   with tempfile.TemporaryDirectory() as root:
    db=sync.db_open(pathlib.Path(root)/'market.db');r={'date':'2024-01-02 09:35','close':10}

@@ -223,5 +223,6 @@ def main():
         collect(json.loads(pathlib.Path(args.request).read_text()),root,args.store,emit,args.parent);return 0
     except Exception as e:
         error={'stage':'blocked','code':getattr(e,'code','COLLECTOR_ERROR'),'error':str(e)}
+        if getattr(e,'details',None):error['details']=e.details
         atomic(root/'error.json',encode({**error,'traceback':traceback.format_exc(limit=12)}));emit(error);return 2
 if __name__=='__main__':sys.exit(main())

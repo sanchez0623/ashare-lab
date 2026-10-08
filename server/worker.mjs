@@ -10,7 +10,7 @@ const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'con
 export default {async fetch(request,env){
   const url=new URL(request.url);if(!url.pathname.startsWith('/api/'))return env.ASSETS.fetch(request);
   try{
-    if(url.pathname==='/api/research/traffic')return reply({error:'本机IP与BaoStock用量需在本地部署版查看；托管后台不能采集BaoStock TCP，也不能探测你电脑的公网IP。',code:'TRAFFIC_LOCAL_ONLY'},501);
+    if(url.pathname==='/api/research/traffic'||url.pathname==='/api/research/traffic/settings')return reply({error:'本机IP与BaoStock用量需在本地部署版查看；托管后台不能采集BaoStock TCP，也不能探测你电脑的公网IP。',code:'TRAFFIC_LOCAL_ONLY'},501);
     if(url.pathname.startsWith('/api/llm/'))return await hostedLLM(request,env);
     if(url.pathname.startsWith('/api/research/repairs'))return reply({error:'第二分钟源核验需在本地部署版运行；托管网站不能连接通达信TCP。',code:'REPAIR_LOCAL_ONLY'},501);
     if(url.pathname==='/api/research/sources'&&request.method==='GET')return await hostedSourceStatus(env);

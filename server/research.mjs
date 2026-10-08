@@ -22,7 +22,7 @@ const failure=(code,message,details)=>Object.assign(Error(message),{code,details
 // Research jobs remain pinned to their strategy engine; collection-only jobs
 // never execute that engine. All collection responses are still revalidated.
 // Unknown pipelines still cannot reuse old work.
-const compatiblePipelines=new Set(['feaf2b252fc38d999dd99d4d00d03b8c65586e46a75e723b340be297cbe21fa1','9b4f4b276eb73097580a9f4ab61428f50c6ad49b79e47fe97f353a2658df838f','c5db467fb8196caa8a6b68a9af2b65f4b80a650aca3bd79da1c883685591990e','37fa697413f07b2a1701a50d85a55030148c7c5236e125f341be1a3a72a0c100','f16cb4ed61cff168dd1b1b79befa5b9b03d1a555c4c2470dae9792eb760deae9','d7b13b8d804033f7b269d961e14b6e81d993fb45d45c03a6e5610e5b751f1f82','cbfe084871bf787bdd04c3a66462968ba036ab9372758022b316883befd22230','5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c','4b3ee26892f85078e72336fa3c010116d812272e8f16b5a4189fa6702062cb13']);
+const compatiblePipelines=new Set(['2919a15466915f406402cc68147bcfcbb2abcfd156dd7fd787ce8a53bbcf5942','feaf2b252fc38d999dd99d4d00d03b8c65586e46a75e723b340be297cbe21fa1','9b4f4b276eb73097580a9f4ab61428f50c6ad49b79e47fe97f353a2658df838f','c5db467fb8196caa8a6b68a9af2b65f4b80a650aca3bd79da1c883685591990e','37fa697413f07b2a1701a50d85a55030148c7c5236e125f341be1a3a72a0c100','f16cb4ed61cff168dd1b1b79befa5b9b03d1a555c4c2470dae9792eb760deae9','d7b13b8d804033f7b269d961e14b6e81d993fb45d45c03a6e5610e5b751f1f82','cbfe084871bf787bdd04c3a66462968ba036ab9372758022b316883befd22230','5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c','4b3ee26892f85078e72336fa3c010116d812272e8f16b5a4189fa6702062cb13']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:canonical(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 export function yearStart(to){const d=new Date(to+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);d.setUTCFullYear(d.getUTCFullYear()-1);return d.toISOString().slice(0,10);}
 export function normalizeRequest(input){
@@ -250,25 +250,35 @@ export class ResearchManager {
       this.sourceCache={at:Date.now(),value};return value;
     })();try{return await this.sourceProbe;}finally{this.sourceProbe=null;}
   }
-  async trafficStatus(){
-    if(this.trafficCache&&Date.now()-this.trafficCache.at<10000)return this.trafficCache.value;
-    if(this.trafficProbe)return this.trafficProbe;
-    this.trafficProbe=(async()=>{
-      const executable=await this.python();
-      try{
-        const stdout=await new Promise((resolve,reject)=>execFile(executable,[path.join(project,'collector/baostock_guard.py'),'--inspect'],{cwd:project,env:pythonEnv(),windowsHide:true,timeout:22000,maxBuffer:64*1024,encoding:'utf8'},(error,stdout)=>error?reject(error):resolve(stdout)));
-        const value={backend:'local',...JSON.parse(stdout)};this.trafficCache={at:Date.now(),value};return value;
-      }catch(e){throw Object.assign(Error(e.code==='ENOENT'?'未找到Python；请安装或设置ASHARE_PYTHON。':'无法读取本机IP与用量；未重置预算，请检查Python与预算文件权限。'),{status:503,code:'TRAFFIC_STATUS_FAILED'});}
-    })();try{return await this.trafficProbe;}finally{this.trafficProbe=null;}
+  collectorEnv(){return {...pythonEnv(),BS_MONITOR_CONFIG:path.join(this.root,'traffic-monitor.json')};}
+  async trafficRead({force=false,monitorIP}={}){
+    const executable=await this.python(),args=[path.join(project,'collector/baostock_guard.py'),'--inspect'];
+    if(force)args.push('--force');if(monitorIP!==undefined)args.push('--set-monitor-ip',monitorIP);
+    try{
+      const stdout=await new Promise((resolve,reject)=>execFile(executable,args,{cwd:project,env:this.collectorEnv(),windowsHide:true,timeout:22000,maxBuffer:64*1024,encoding:'utf8'},(error,stdout)=>{
+        if(error){let v;try{v=JSON.parse(stdout);}catch{}if(v?.code==='MONITOR_IP')reject(Object.assign(Error(v.error),{status:400,code:v.code}));else reject(error);}else resolve(stdout);
+      }));
+      const value={backend:'local',...JSON.parse(stdout)};this.trafficCache={at:Date.now(),value};return value;
+    }catch(e){if(e.code==='MONITOR_IP')throw e;throw Object.assign(Error(e.code==='ENOENT'?'未找到Python；请安装或设置ASHARE_PYTHON。':'无法读取本机IP与用量；未重置预算，请检查Python与预算文件权限。'),{status:503,code:'TRAFFIC_STATUS_FAILED'});}
+  }
+  async trafficStatus({force=false}={}){
+    if(this.trafficProbe){const value=await this.trafficProbe;if(!force)return value;}
+    if(!force&&this.trafficCache&&Date.now()-this.trafficCache.at<10000)return this.trafficCache.value;
+    this.trafficProbe=this.trafficRead({force});try{return await this.trafficProbe;}finally{this.trafficProbe=null;}
+  }
+  async saveTrafficSettings(input){
+    if(!input||typeof input.monitorIP!=='string'||input.monitorIP.length>15||input.monitorIP.trim()&&!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(input.monitorIP.trim()))throw Object.assign(Error('请填写有效的公网IPv4；留空恢复自动候选识别。'),{status:400,code:'MONITOR_IP'});
+    const run=async()=>{if(this.trafficProbe)await this.trafficProbe.catch(()=>{});this.trafficCache=null;this.trafficProbe=this.trafficRead({monitorIP:input.monitorIP.trim(),force:true});try{return await this.trafficProbe;}finally{this.trafficProbe=null;}};
+    const task=(this.trafficSettingsWrites??Promise.resolve()).catch(()=>{}).then(run);this.trafficSettingsWrites=task;return task;
   }
   async collectPython(job,collection){
     const executable=await this.python();await rm(path.join(collection,'error.json'),{force:true});
-    const child=spawn(executable,[path.join(project,'collector/research_collect.py'),'--request',this.location(job.id,'request.json'),'--root',collection,'--store',path.join(this.root,'market'),'--parent',String(process.pid)],{cwd:project,env:pythonEnv(),windowsHide:true,stdio:['ignore','pipe','pipe']});this.child=child;
+    const child=spawn(executable,[path.join(project,'collector/research_collect.py'),'--request',this.location(job.id,'request.json'),'--root',collection,'--store',path.join(this.root,'market'),'--parent',String(process.pid)],{cwd:project,env:this.collectorEnv(),windowsHide:true,stdio:['ignore','pipe','pipe']});this.child=child;
     let pending='',stderr='';const abort=()=>{writeFile(path.join(collection,'cancel'),'pause').catch(()=>{});child.kill();};job.controller.signal.addEventListener('abort',abort,{once:true});
     child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{pending+=chunk;if(pending.length>1024*1024)pending=pending.slice(-65536);let index;while((index=pending.indexOf('\n'))!==-1){const line=pending.slice(0,index);pending=pending.slice(index+1);try{const p=JSON.parse(line);this.progress(job,p).catch(()=>{});}catch{}}});
     child.stderr.setEncoding('utf8');child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-4000);});
     try{await new Promise((resolve,reject)=>{child.once('error',e=>reject(failure('PYTHON_MISSING','无法启动Python。安装依赖，或设置ASHARE_PYTHON：'+e.code)));child.once('close',code=>code===0?resolve():reject(failure('COLLECTOR_ERROR','采集器中断：'+(stderr.includes('ModuleNotFoundError')?'缺少Python依赖，请安装collector/requirements.txt':'退出码 '+code))));});}
-    catch(e){this.check(job);let detail;try{detail=JSON.parse(await readFile(path.join(collection,'error.json'),'utf8'));}catch{}throw detail?failure(detail.code,detail.error,detail.traceback?{collectorTraceback:detail.traceback}:undefined):e;}
+    catch(e){this.check(job);let detail;try{detail=JSON.parse(await readFile(path.join(collection,'error.json'),'utf8'));}catch{}throw detail?failure(detail.code,detail.error,{...detail.details,...(detail.traceback?{collectorTraceback:detail.traceback}:{})}):e;}
     finally{job.controller.signal.removeEventListener('abort',abort);this.child=null;}
   }
   async runEngine(job,snapshot,config){
@@ -289,7 +299,8 @@ export class ResearchManager {
     try{const url=new URL(request.url),pathname=url.pathname,base='/api/research/jobs';
       if(pathname==='/api/research/sources'&&request.method==='GET')return jsonResponse(await this.sourceStatus());
       if(request.method==='POST'){const origin=request.headers.get('origin');if(origin&&origin!==url.origin)return jsonResponse({error:'只接受本站任务写入'},403);if(!request.headers.get('content-type')?.startsWith('application/json'))return jsonResponse({error:'需要JSON请求'},415);}
-      if(pathname==='/api/research/traffic'&&request.method==='POST')return jsonResponse(await this.trafficStatus());
+      if(pathname==='/api/research/traffic'&&request.method==='POST'){const body=await request.json();return jsonResponse(await this.trafficStatus({force:body?.force===true}));}
+      if(pathname==='/api/research/traffic/settings'&&request.method==='POST')return jsonResponse(await this.saveTrafficSettings(await request.json()));
       if(pathname===base&&request.method==='GET')return jsonResponse({jobs:[...this.jobs.values()].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(j=>this.view(j)),batches:[...this.batches.values()].sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(b=>this.batchView(b)),backend:'local',serial:true});
       if(pathname===base&&request.method==='POST')return jsonResponse(await this.create(await request.json()),202);
       if(pathname==='/api/research/batches'&&request.method==='POST')return jsonResponse(await this.createBatch(await request.json()),202);

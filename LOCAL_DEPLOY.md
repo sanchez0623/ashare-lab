@@ -24,6 +24,14 @@
 
 服务只监听本机127.0.0.1，不提供局域网共享或公网登录。不要把它直接通过隧道、反向代理公开；多人服务需要另做鉴权。Windows / macOS 启动脚本已提供；本次实际启动与浏览器验收在 Linux / Node.js 24 上完成。
 
+### 1.1 代理/VPN与监控IP
+
+在“行情数据 → BaoStock · 监控 IP 与用量”中查看IP与预算。HTTP候选IP可能是代理出口，不代表BaoStock TCP出口；程序会明确标记未核验。可以填写已确认的公网IPv4并“保存监控 IP”，设置持久保存在数据目录下的 `research/traffic-monitor.json`，重启保留；留空恢复自动候选识别。“刷新候选 IP 与用量”会强制更新HTTP候选，不清零预算。
+
+`BS_MONITOR_IP` 环境变量优先于网页设置。人工声明只用于监控，不改变BaoStock连接，也不能解除黑名单或修复空响应。采集任务的旧IP日志保留当时证据，后续请求按新声明监控。
+
+代理/VPN下发生 `PROVIDER_RESPONSE_INCOMPLETE` 时，按新版错误里的登录/查询阶段、接收超时或连接关闭原因排查 `public-api.baostock.com:10030`。Windows可用 `Test-NetConnection public-api.baostock.com -Port 10030` 检查端口；SDK查询成功仍需实际运行任务验证。先解决本机路由或代理分流，再恢复原任务，已完成分段继续复用。
+
 ## 2. 安装 Python 采集环境
 
 安装 [Python 3.12](https://www.python.org/downloads/)（最低3.10）。Windows安装时勾选添加到 PATH；命令示例使用 `py` 启动器，无需激活 PowerShell 虚拟环境。进入项目目录。

@@ -1,4 +1,4 @@
-import datetime as dt,json,pathlib,sqlite3,sys,tempfile,unittest
+import datetime as dt,json,pathlib,sqlite3,sys,tempfile,unittest,os
 from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'collector'))
 import public_ip
@@ -65,5 +65,45 @@ class IPTests(unittest.TestCase):
     try:
      guard.reserve();stamp[0]=600;guard.reserve();self.assertEqual(guard.usage()['monitorIP']['ip'],'8.8.4.4');self.assertEqual(guard.usage()['requests'],2);self.assertEqual(guard.usage()['ipRequests'],1)
      with self.assertRaises(RuntimeError):guard.reserve()
+    finally:guard.close()
+ def test_windows_system_proxy_is_detected_and_credentials_never_cached(self):
+  with tempfile.TemporaryDirectory() as root,patch.dict(os.environ,{},clear=True),patch('public_ip.urllib.request.getproxies',return_value={'https':'http://system-user:fixture-password@system.example:8080'}):
+   path=pathlib.Path(root)/'cache.json'
+   value=public_ip.public_ip(path,fetch=lambda _: '8.8.4.4',clock=lambda:1000)
+   self.assertTrue(value['httpProxyDetected']);self.assertTrue(value['systemProxyDetected']);self.assertFalse(value['tcpEgressVerified'])
+   self.assertIn('系统代理',value['note']);self.assertNotIn('system-user',path.read_text());self.assertNotIn('fixture-password',path.read_text())
+ def test_manual_setting_persists_wins_over_cache_and_environment_takes_precedence(self):
+  with tempfile.TemporaryDirectory() as root:
+   config=pathlib.Path(root)/'monitor.json';cache=pathlib.Path(root)/'cache.json';env={'BS_MONITOR_CONFIG':str(config)}
+   public_ip.public_ip(cache,env=env,fetch=lambda _: '8.8.4.4')
+   public_ip.save_monitor_ip(config,'9.9.9.9')
+   def fail(*_):raise AssertionError('manual monitoring must not probe HTTP')
+   public_ip._IP_CACHE.clear();value=public_ip.public_ip(cache,env=env,fetch=fail)
+   self.assertEqual(value['source'],'local-setting');self.assertEqual(value['ip'],'9.9.9.9');self.assertFalse(value['tcpEgressVerified'])
+   self.assertEqual(public_ip.public_ip(cache,env={**env,'BS_MONITOR_IP':'8.8.8.8'},fetch=fail)['source'],'environment')
+   before=config.read_bytes()
+   for ip in ['192.168.1.1','127.0.0.1','100.64.0.1','203.0.113.1','8.8.8.8 extra','--help']:
+    with self.assertRaises(ValueError):public_ip.save_monitor_ip(config,ip)
+    self.assertEqual(config.read_bytes(),before)
+   public_ip.save_monitor_ip(config,'');self.assertEqual(public_ip.monitor_settings(env)['mode'],'auto')
+   self.assertEqual(public_ip.public_ip(cache,env=env,fetch=lambda _: '8.8.8.8',force=True)['ip'],'8.8.8.8')
+ def test_force_refresh_bypasses_memory_and_disk_cache(self):
+  with tempfile.TemporaryDirectory() as root:
+   path=pathlib.Path(root)/'cache.json';values=iter(['9.9.9.9','8.8.4.4']);fetch=lambda _:next(values)
+   first=public_ip.public_ip(path,env={},clock=lambda:1000,fetch=fetch)
+   self.assertEqual(public_ip.public_ip(path,env={},clock=lambda:1001,fetch=fetch)['ip'],first['ip'])
+   refreshed=public_ip.public_ip(path,env={},clock=lambda:1001,fetch=fetch,force=True)
+   self.assertEqual(refreshed['ip'],'8.8.4.4');self.assertFalse(refreshed['cached']);self.assertFalse(refreshed['tcpEgressVerified'])
+ def test_running_guard_observes_settings_change_on_next_request_without_reset(self):
+  with tempfile.TemporaryDirectory() as root:
+   config=pathlib.Path(root)/'monitor.json';public_ip.save_monitor_ip(config,'9.9.9.9')
+   with patch.dict(os.environ,{'BS_MONITOR_IP':'','BS_MONITOR_CONFIG':str(config)}),patch('baostock_guard.time.sleep'):
+    guard=TrafficGuard(pathlib.Path(root)/'budget.db',limit=2)
+    try:
+     guard.reserve();public_ip.save_monitor_ip(config,'8.8.4.4');guard.reserve()
+     self.assertEqual(guard.usage()['monitorIP']['ip'],'8.8.4.4');self.assertEqual(guard.usage()['requests'],2);self.assertEqual(guard.usage()['ipRequests'],1)
+     with self.assertRaisesRegex(RuntimeError,'预算'):guard.reserve()
+     guard.block();public_ip.save_monitor_ip(config,'8.8.8.8')
+     with self.assertRaisesRegex(RuntimeError,'本日采集停止'):guard.reserve()
     finally:guard.close()
 if __name__=='__main__':unittest.main()
