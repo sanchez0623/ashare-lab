@@ -25,7 +25,7 @@ const os=require('node:os');
   await page.locator('#view-optimization [data-view=backtest]').click();
   for(const [key,value] of Object.entries({dailyFast:5,dailySlow:20,exitPeriod:5,breakout:5,confirmationDays:1,atrPeriod:5,maxExtensionATR:10}))await page.locator('#config [name='+key+']').fill(String(value));
   await page.locator('#config [name=management]').selectOption('base');await page.locator('nav [data-view=optimization]').click();
-  await page.locator('.tuning-thresholds summary').click();await page.locator('#tuning-mintrades').fill('5');assert.equal(await page.locator('[name=minTrades]').inputValue(),'5');
+  await page.locator('.tuning-thresholds summary').click();await page.locator('#tuning-mintrades').fill('5');assert.equal(await page.locator('#config [name=minTrades]').inputValue(),'5');
   await page.locator('#tuning-start').click();await ready();const tuned=await exported();assert.equal(tuned.rows.length,18);assert.ok(tuned.recommendation);assert.equal(tuned.inputConfig.minTrades,5);assert.ok(tuned.trainTo<tuned.validationFrom);
   assert.equal(tuned.rows.find(r=>r.isBaseline).validationDelta,0);assert.equal(tuned.recommendation.config.commission,.005);assert.ok(await page.locator('#tuning-apply').isVisible());
   await page.screenshot({path:'/workspace/scratch/tuning-results-desktop.png',fullPage:true});await page.setViewportSize({width:390,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));await page.screenshot({path:'/workspace/scratch/tuning-results-mobile.png',fullPage:true});await page.setViewportSize({width:1440,height:1050});

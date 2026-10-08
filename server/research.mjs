@@ -9,6 +9,8 @@ import {auditBundle,auditDisposition,isAuditAdmitted} from '../dist/quality.mjs'
 import {resampleData} from '../dist/data.mjs';
 import {parseCollectionCodes,batchLimit} from '../dist/collection-batch.mjs';
 import {requiredWarmupSessions} from '../dist/research-input.mjs';
+import {validateParameterValue} from '../dist/parameter-schema.mjs';
+import {validateTrainingInputs} from '../dist/training-input.mjs';
 import {ensureTiming,accrue,startTiming,stopTiming,timingView,iso} from './research-timing.mjs';
 
 const project=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
@@ -20,7 +22,7 @@ const failure=(code,message,details)=>Object.assign(Error(message),{code,details
 // Research jobs remain pinned to their strategy engine; collection-only jobs
 // never execute that engine. All collection responses are still revalidated.
 // Unknown pipelines still cannot reuse old work.
-const compatiblePipelines=new Set(['9b4f4b276eb73097580a9f4ab61428f50c6ad49b79e47fe97f353a2658df838f','c5db467fb8196caa8a6b68a9af2b65f4b80a650aca3bd79da1c883685591990e','37fa697413f07b2a1701a50d85a55030148c7c5236e125f341be1a3a72a0c100','f16cb4ed61cff168dd1b1b79befa5b9b03d1a555c4c2470dae9792eb760deae9','d7b13b8d804033f7b269d961e14b6e81d993fb45d45c03a6e5610e5b751f1f82','cbfe084871bf787bdd04c3a66462968ba036ab9372758022b316883befd22230','5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c','4b3ee26892f85078e72336fa3c010116d812272e8f16b5a4189fa6702062cb13']);
+const compatiblePipelines=new Set(['feaf2b252fc38d999dd99d4d00d03b8c65586e46a75e723b340be297cbe21fa1','9b4f4b276eb73097580a9f4ab61428f50c6ad49b79e47fe97f353a2658df838f','c5db467fb8196caa8a6b68a9af2b65f4b80a650aca3bd79da1c883685591990e','37fa697413f07b2a1701a50d85a55030148c7c5236e125f341be1a3a72a0c100','f16cb4ed61cff168dd1b1b79befa5b9b03d1a555c4c2470dae9792eb760deae9','d7b13b8d804033f7b269d961e14b6e81d993fb45d45c03a6e5610e5b751f1f82','cbfe084871bf787bdd04c3a66462968ba036ab9372758022b316883befd22230','5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c','4b3ee26892f85078e72336fa3c010116d812272e8f16b5a4189fa6702062cb13']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:canonical(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 export function yearStart(to){const d=new Date(to+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);d.setUTCFullYear(d.getUTCFullYear()-1);return d.toISOString().slice(0,10);}
 export function normalizeRequest(input){
@@ -41,7 +43,15 @@ export function normalizeRequest(input){
   Object.assign(cfg,{from,to:input.to,board,dataMode:'formal',rulesMode:'historical'});
   const purpose=input.purpose??'research';if(!['collect','research'].includes(purpose))throw failure('REQUEST','任务用途须为collect或research');
   if(!(purpose==='collect'?['5m','15m','1d']:['5m','15m']).includes(cfg.timeframe))throw failure('REQUEST','仅采集可指定5分钟、15分钟或日线回测；沪深300正式验收需5或15分钟。原始采集均为5分钟');
-  validate(cfg);
+  if(purpose==='collect'){
+    // Only these periods affect the amount of raw history requested. A
+    // collection job never runs a strategy or uses profit/risk thresholds.
+    for(const key of ['dailySlow','breakout','exitPeriod','atrPeriod','confirmationDays','slow','macdSlow','macdSignal','rsiPeriod','bbPeriod']){
+      try{validateParameterValue(key,cfg[key]);}catch(e){throw failure('REQUEST','采集预热参数无效：'+e.message,{parameter:key});}
+    }
+  }else{
+    try{validateTrainingInputs(cfg);validate(cfg);}catch(e){throw failure('REQUEST',e.message,e.parameter?{parameter:e.parameter}:undefined);}
+  }
   const minimumWarmup=requiredWarmupSessions(cfg),warmupSessions=input.warmupSessions??minimumWarmup;
   if(!Number.isInteger(warmupSessions)||warmupSessions<minimumWarmup||warmupSessions>1000)throw failure('REQUEST',`预热交易日须为 ${minimumWarmup} 至 1000 的整数；不能低于当前参数的预热要求`);
   const budget=input.budget??10000;if(!Number.isInteger(budget)||budget<1||budget>40000)throw failure('REQUEST','日预算须为1至40000，默认10000');
@@ -88,7 +98,7 @@ export function auditAccounting(result,bundle){
   return {status:'passed',valuationPoints:checked,fees,checks:['order and corporate cash/share movements','cash + tradable/locked stock value + dividend receivable','order fee sum','final equity','signal availability','sellable quantity']};
 }
 async function engineHash(){const files=['engine.mjs','quality.mjs','data.mjs','rules.mjs','corporate.mjs','fees.mjs','inventory.mjs','corporate-correction.mjs','corporate-evidence.json'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,'dist',f)))]);parts.push(['runner',hash(await readFile(path.join(project,'server/research-runner.mjs')))]);return hash(canonical(parts));}
-async function pipelineHash(){const files=['server/research.mjs','server/research-timing.mjs','collector/research_collect.py','collector/query_cache.py','dist/research-input.mjs','collector/sources.py','collector/sync.py','collector/locking.py','collector/baostock_guard.py','collector/public_ip.py','collector/parquet_store.py','collector/corporate_correction.py','dist/corporate-evidence.json'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,f)))]);return hash(canonical(parts));}
+async function pipelineHash(){const files=['server/research.mjs','server/research-timing.mjs','collector/research_collect.py','collector/query_cache.py','dist/research-input.mjs','dist/parameter-schema.mjs','dist/training-input.mjs','collector/sources.py','collector/sync.py','collector/locking.py','collector/baostock_guard.py','collector/public_ip.py','collector/parquet_store.py','collector/corporate_correction.py','dist/corporate-evidence.json'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,f)))]);return hash(canonical(parts));}
 const jsonResponse=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'}});
 // Node decodes collector output as UTF-8; Windows pipe encodings must match.
 const pythonEnv=()=>({...process.env,PYTHONIOENCODING:'utf-8'});
@@ -293,6 +303,6 @@ export class ResearchManager {
       }
       if(['pause','resume','repeat'].includes(match[2])&&request.method==='POST')return jsonResponse(await this[match[2]](job.id),202);
       return jsonResponse({error:'任务方法不存在'},405);
-    }catch(e){return jsonResponse({error:e.message,code:e.code??'TASK_ERROR'},e.status??(e.code==='NOT_FOUND'?404:e.code==='REQUEST'||e.message.includes('参数')?400:409));}
+    }catch(e){return jsonResponse({error:e.message,code:e.code??'TASK_ERROR',...(e.details?.parameter?{parameter:e.details.parameter}:{})},e.status??(e.code==='NOT_FOUND'?404:e.code==='REQUEST'||e.message.includes('参数')?400:409));}
   }
 }

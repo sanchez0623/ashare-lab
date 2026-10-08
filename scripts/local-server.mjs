@@ -10,7 +10,7 @@ import {LocalLLM} from '../server/llm-local.mjs';
 import {archiveCorporateCorrection} from '../server/corporate-archive-local.mjs';
 
 const projectRoot=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const validKey=key=>/^(snapshots|manifests)\/[a-f0-9]{64}\.json$/.test(key);
+const validKey=key=>/^(snapshots|manifests|portfolio-reports)\/[a-f0-9]{64}\.json$/.test(key);
 export class FileBucket {
   constructor(root){this.root=path.resolve(root);}
   location(key){if(!validKey(key))throw Error('仓库对象路径无效');return path.join(this.root,key);}

@@ -2,6 +2,7 @@ import {tuningCandidates} from './parameter-tuning.mjs';
 import {managementNames,periodLabel} from './engine.mjs';
 import {parameterSchema,tuningSpecs,strategyNames,candidateLabel} from './parameter-schema.mjs';
 import {assessWarmup,warmupAvailability,warmupMessage} from './warmup.mjs';
+import {validateTrainingInputs,trainingInputIssue} from './training-input.mjs';
 
 export function setupOptimization({getContext,setConfig,showView,runBacktest,notify,prepareHistory,prepareCollection}){
   const $=s=>document.querySelector(s),escape=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -57,6 +58,7 @@ export function setupOptimization({getContext,setConfig,showView,runBacktest,not
     const current={cancelled:false,worker:null,reject:null};activeRun=current;busy(true);$('#tuning-progress').value=0;
     $('#tuning-status').textContent=type==='management'?'正在比较5种仓位方案，资金与费用固定。':'正在自动生成当前参数附近的候选，训练选参后再检查验证段。';
     try{
+      validateTrainingInputs(c);
       if(context.quality?.status==='blocked')throw Error('数据准入失败：'+(context.quality.blockingIssues??context.quality.issues??[]).map(i=>i.message).join('；'));
       const candidates=type==='management'?[c]:tuningCandidates(c,search).candidates.map(p=>p.config);let history=checkHistory(context,candidates),prepareError=null;
       if(!history.sufficient&&prepareHistory){
@@ -82,6 +84,8 @@ export function setupOptimization({getContext,setConfig,showView,runBacktest,not
     finally{current.worker?.terminate();activeRun=null;busy(false);}
   }
   $('#tuning-form').onsubmit=e=>{e.preventDefault();start('parameters');};$('#tuning-form').oninput=e=>{const key=e.target.dataset.trainingKey;if(key&&e.target.value!==''&&e.target.validity.valid){const field=document.querySelector('#config').elements.namedItem(key);field.value=e.target.value;field.dispatchEvent(new Event('input',{bubbles:true}));}refresh();};
+  $('#tuning-form').addEventListener('invalid',e=>{const issue=trainingInputIssue(e.target.dataset.trainingKey,e.target.value===''?NaN:Number(e.target.value));if(issue){e.target.setAttribute('aria-invalid','true');$('#tuning-status').textContent=issue.message;}},true);
+  $('#tuning-form').addEventListener('input',e=>{if(e.target.dataset.trainingKey){e.target.removeAttribute('aria-invalid');const issue=trainingInputIssue(e.target.dataset.trainingKey,e.target.value===''?NaN:Number(e.target.value));if(issue)$('#tuning-status').textContent=issue.message;else if(!activeRun)$('#tuning-status').textContent='门槛已修改；点击开始重新计算。';}});
   $('#tuning-history-collect').onclick=()=>{if(historyPlan&&!historyPlan.sufficient)prepareCollection?.(historyPlan.requiredCollectionSessions);};
   $('#tuning-management').onclick=()=>start('management');
   $('#tuning-cancel').onclick=()=>{if(!activeRun)return;activeRun.cancelled=true;activeRun.worker?.terminate();activeRun.reject?.(Error('已停止本轮计算；没有应用任何参数。'));};
