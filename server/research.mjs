@@ -20,7 +20,7 @@ const failure=(code,message,details)=>Object.assign(Error(message),{code,details
 // Research jobs remain pinned to their strategy engine; collection-only jobs
 // never execute that engine. All collection responses are still revalidated.
 // Unknown pipelines still cannot reuse old work.
-const compatiblePipelines=new Set(['37fa697413f07b2a1701a50d85a55030148c7c5236e125f341be1a3a72a0c100','f16cb4ed61cff168dd1b1b79befa5b9b03d1a555c4c2470dae9792eb760deae9','d7b13b8d804033f7b269d961e14b6e81d993fb45d45c03a6e5610e5b751f1f82','cbfe084871bf787bdd04c3a66462968ba036ab9372758022b316883befd22230','5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c','4b3ee26892f85078e72336fa3c010116d812272e8f16b5a4189fa6702062cb13']);
+const compatiblePipelines=new Set(['c5db467fb8196caa8a6b68a9af2b65f4b80a650aca3bd79da1c883685591990e','37fa697413f07b2a1701a50d85a55030148c7c5236e125f341be1a3a72a0c100','f16cb4ed61cff168dd1b1b79befa5b9b03d1a555c4c2470dae9792eb760deae9','d7b13b8d804033f7b269d961e14b6e81d993fb45d45c03a6e5610e5b751f1f82','cbfe084871bf787bdd04c3a66462968ba036ab9372758022b316883befd22230','5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c','4b3ee26892f85078e72336fa3c010116d812272e8f16b5a4189fa6702062cb13']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:canonical(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 export function yearStart(to){const d=new Date(to+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);d.setUTCFullYear(d.getUTCFullYear()-1);return d.toISOString().slice(0,10);}
 export function normalizeRequest(input){
@@ -68,11 +68,11 @@ export function acceptanceAudit(bundle,request){
 export function auditAccounting(result,bundle){
   const prices=new Map(resampleData(bundle.bars,result.config.timeframe).map(r=>[r.date,r.close]));
   const daily=new Map(bundle.daily.map(d=>[d.date,d])),exDates=new Set(bundle.actions.map(a=>a.exDate));
-  const movements=result.trades.map(t=>({at:t.executionTime,cash:t.side==='买入'?-t.amount-t.fee:t.amount-t.fee,quantity:t.side==='买入'?t.quantity:-t.quantity,locked:0,receivable:0}));
+  const movements=result.trades.map(t=>({at:t.confirmationTime??t.executionTime,cash:t.side==='买入'?-t.amount-t.fee:t.amount-t.fee,quantity:t.side==='买入'?t.quantity:-t.quantity,locked:0,receivable:0}));
   for(const e of result.corporateEvents){const p={at:e.date+' 09:00',cash:0,quantity:0,locked:0,receivable:0};if(e.event==='股息到账'){p.cash=e.amount;p.receivable=-e.amount;}else if(e.event==='送转股上市'){p.quantity=e.quantity;p.locked=-e.quantity;}else if(e.event==='除权权益入账'){p.receivable=e.cashReceivable;p.locked=e.lockedShares;}else continue;movements.push(p);}
   movements.sort((a,b)=>a.at.localeCompare(b.at));let cursor=0,cash=result.config.capital,quantity=0,locked=0,receivable=0;
   let checked=0;for(const p of result.curve){const day=p.date.slice(0,10),d=daily.get(day),price=prices.get(p.date)??(p.valuationOnly?(exDates.has(day)?d?.prev_close:d?.close):undefined);
-    while(cursor<movements.length&&movements[cursor].at<=p.date){const flow=movements[cursor++];cash+=flow.cash;quantity+=flow.quantity;locked+=flow.locked;receivable+=flow.receivable;}
+    while(cursor<movements.length&&movements[cursor].at<=(p.date.length===10?p.date+' 15:00':p.date)){const flow=movements[cursor++];cash+=flow.cash;quantity+=flow.quantity;locked+=flow.locked;receivable+=flow.receivable;}
     if(Math.abs(p.cash-cash)>.011||p.quantity!==quantity||p.lockedQuantity!==locked||Math.abs(p.receivable-receivable)>.011)throw failure('ACCOUNTING','成交现金流、股份或权益流水核对失败：'+p.date);
     const expected=p.cash+(p.quantity+p.lockedQuantity)*price+p.receivable;
     if(!Number.isFinite(expected)||Math.abs(p.equity-expected)>0.011||Math.abs(p.nav-p.equity/result.config.capital)>1e-10||p.cash<-.011||p.quantity<0)throw failure('ACCOUNTING','现金、持仓或净值核对失败：'+p.date);
@@ -81,6 +81,9 @@ export function auditAccounting(result,bundle){
   const fees=result.trades.reduce((s,t)=>s+t.fee,0);
   if(Math.abs(fees-result.metrics.fees)>.011||Math.abs(result.metrics.equity-result.curve.at(-1).equity)>.011)throw failure('ACCOUNTING','成交费用或期末资产核对失败');
   for(const t of result.trades){if(t.signalTime>t.executionTime||t.dailySignalTime&&t.dailySignalTime>t.executionTime)throw failure('LOOKAHEAD','发现执行早于信号可得时间');if(Math.abs(t.amount-t.quantity*t.price)>.011||t.side==='卖出'&&t.sellableBefore<t.quantity)throw failure('ACCOUNTING','成交金额或T+1可卖库存核对失败');}
+  for(const o of result.orderAttempts??[])if(o.signalTime>o.submittedAt||o.dailySignalTime&&o.dailySignalTime>o.submittedAt||o.submittedAt>o.evidenceAvailableAt||o.evidenceAvailableAt>o.resolvedAt)throw failure('LOOKAHEAD','订单提交或成交确认时序不符');
+  for(const t of result.trades)if(t.confirmationTime&&t.executionTime>t.confirmationTime)throw failure('LOOKAHEAD','成交确认早于估算执行时间');
+  if((result.orderAttempts??[]).some(o=>o.status==='unfilled'&&result.trades.some(t=>t.orderId===o.id)))throw failure('ACCOUNTING','未成交订单错误进入成交账簿');
   return {status:'passed',valuationPoints:checked,fees,checks:['order and corporate cash/share movements','cash + tradable/locked stock value + dividend receivable','order fee sum','final equity','signal availability','sellable quantity']};
 }
 async function engineHash(){const files=['engine.mjs','quality.mjs','data.mjs','rules.mjs','corporate.mjs','fees.mjs','inventory.mjs','corporate-correction.mjs','corporate-evidence.json'];const parts=[];for(const f of files)parts.push([f,hash(await readFile(path.join(project,'dist',f)))]);parts.push(['runner',hash(await readFile(path.join(project,'server/research-runner.mjs')))]);return hash(canonical(parts));}

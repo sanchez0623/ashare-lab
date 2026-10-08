@@ -26,7 +26,7 @@ export function repairPlan(bundle){
   const m=bundle?.metadata;if(m?.synthetic||m?.timeframe!=='5m'||m?.priceBasis!=='raw'||m?.volumeUnit!=='shares')reject('REPAIR_IDENTITY','修复仅接受真实、未复权、股单位的原生5分钟完整数据包。');
   if(m.minuteRepair)reject('REPAIR_PARENT','请使用原始快照发起核验；未完成任务可断点恢复。');
   const report=auditBundle(bundle,{scope:repairScope(bundle)});
-  const other=report.issues.filter(x=>!['DAILY_CROSSCHECK','DAILY_OHLC_CROSSCHECK','MINUTE_GAPS'].includes(x.code));
+  const other=report.blockingIssues.filter(x=>x.code!=='MINUTE_GAPS');
   if(other.length)reject('REPAIR_PREREQUISITES','请先处理非分钟量价问题：'+other.map(x=>x.message).join('；'));
   const grouped=byDay(bundle.bars),days=[];
   for(const d of bundle.daily){if(d.date<m.requested.from||d.date>m.requested.to||d.halted===1)continue;const rows=grouped.get(d.date)??[];

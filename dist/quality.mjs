@@ -2,8 +2,8 @@ import {slots,dayOf,detectTimeframe} from './data.mjs';
 import {boardNames} from './rules.mjs';
 import {verifyOfficialCorrections} from './corporate-correction.mjs';
 const validDate=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s;
-export const auditVersion='3.5';
-const warningCodes=new Set(['DAILY_CROSSCHECK','DAILY_OHLC_CROSSCHECK']);
+export const auditVersion='3.6';
+const warningCodes=new Set(['DAILY_CROSSCHECK','DAILY_OHLC_CROSSCHECK','ZERO_VOLUME_BARS']);
 export const isAuditAdmitted=report=>['passed','warning'].includes(report?.status);
 export function auditDisposition(issues){
   const warnings=issues.filter(x=>warningCodes.has(x.code)),blockingIssues=issues.filter(x=>!warningCodes.has(x.code));
@@ -36,6 +36,7 @@ export function auditBundle(b,{scope='hs300'}={}){
     if(!byDay.has(day))byDay.set(day,[]);byDay.get(day).push(r);
   }
   if(bad)add('BAR_INVALID','无效价格、时间或分钟网格',bad);if(dups)add('DUPLICATES','重复时间',dups);if(unordered)add('ORDER','行情未严格递增',unordered);
+  const zeroVolume=bars.filter(r=>r.volume===0&&r.halted!==1);if(zeroVolume.length)add('ZERO_VOLUME_BARS','非停牌零成交量K线：保留原值，相关开盘估算订单需收盘后核验，零成交量区间不产生成交或费用',zeroVolume.length,zeroVolume.map(r=>r.date));
   const dm=new Map(daily.map(d=>[d.date,d]));if(dm.size!==daily.length)add('DAILY_DUPLICATES','逐日元数据重复');
   const sessions=calendar.filter(d=>d>=range.from&&d<=range.to&&(!m.listedDate||d>=m.listedDate)&&(!m.delistedDate||d<=m.delistedDate));
   const missing=[],short=[],st=[],halts=[],references=[],mismatch=[],extremes=[],factors=[],invalidDaily=[];let completeSessions=0,suspendedSessions=0;

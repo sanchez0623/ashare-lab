@@ -54,7 +54,8 @@ export function parseCSV(text) {
     if(r.high<Math.max(r.open,r.close)||r.low>Math.min(r.open,r.close)||r.low>r.high)throw Error(`第 ${i+2} 行 OHLC 价格关系不正确。`);
     for(const key of ['prev_close','signal_close','limit_up','limit_down'])if(r[key]!==undefined&&(!Number.isFinite(r[key])||r[key]<=0))throw Error(`第 ${i+2} 行 ${key} 无效。`);
     if(r.halted!==undefined&&![0,1].includes(r.halted))throw Error('halted 只能为 0 或 1，表示开盘时已知的停牌状态。');
-    if(r.volume===0&&r.halted!==1)throw Error(`第 ${i+2} 行零成交量需提供开盘已知的 halted=1，不能用当根结束后成交量判断开盘可成交。`);
+    // Zero traded volume is an execution outcome, not opening-known suspension.
+    // Keep the candle and the supplied status; the engine resolves fills later.
     if((r.limit_up===undefined)!==(r.limit_down===undefined))throw Error('涨停价与跌停价需成对提供。');
     if(r.limit_up!==undefined&&r.limit_up<r.limit_down)throw Error('涨停价不能低于跌停价。');
     return r;

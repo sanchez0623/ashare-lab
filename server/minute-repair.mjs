@@ -13,7 +13,7 @@ const error=(code,message,status=409)=>Object.assign(Error(message),{code,status
 const reply=(v,status=200)=>new Response(JSON.stringify(v),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});
 // Reviewed previous version used identical immutable source responses and raw
 // bar semantics. Recovery still validates its request, parent and evidence.
-const compatibleRepairs=new Set(['8e8916f5d794a1becf21bd1bf61691831a1f2616d75be9664dbf85ca51afa7c2','5b96eb04c4967c73c285189ffa3fdc6ada2a17a010ce7e003a2bc8d0ffb233ff']);
+const compatibleRepairs=new Set(['7fbcd5cbeea79d6a875ecbb7899267c0e54e59a1fc78faca63fb2cdf5dbdf945','8e8916f5d794a1becf21bd1bf61691831a1f2616d75be9664dbf85ca51afa7c2','5b96eb04c4967c73c285189ffa3fdc6ada2a17a010ce7e003a2bc8d0ffb233ff']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:stable(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 
 export class MinuteRepairManager {

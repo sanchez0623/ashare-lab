@@ -78,12 +78,16 @@ export function backtest(input,config={}) {
   let qualityReport=null,actions=[],metadata=null,sessionCalendar=[],dailyMeta=new Map();
   if(Array.isArray(input)&&['formal','single'].includes(c.dataMode))throw Error('正式研究或单标的回测需要完整数据包，不接受未经独立校验的行情数组。');
   if(!Array.isArray(input)){const prepared=prepareBundle(input,{scope:c.dataMode==='single'?'single-security':'hs300'});qualityReport=prepared.report;actions=prepared.actions;metadata=prepared.metadata;sessionCalendar=prepared.calendar;dailyMeta=new Map(prepared.daily.map(d=>[d.date,d]));input=prepared.bars;c.board=metadata.board;c.rulesMode='historical';}
-  const native=detectTimeframe(input),data=resampleData(input,c.timeframe);
+  const native=detectTimeframe(input);
+  for(const r of input)if(!Number.isFinite(r.volume)||r.volume<0)throw Error('原生成交量必须是非负有效数字：'+r.date);
+  const data=resampleData(input,c.timeframe);
   if(data.length<2)throw Error('行情不足两根 K 线。');
   for(let i=0;i<data.length;i++){
     const r=data[i];if(i&&r.date<=data[i-1].date)throw Error('行情必须严格按时间排序，不得有重复时间。');
-    if(r.volume===0&&r.halted!==1)throw Error('零成交量 K 线需要开盘已知的 halted=1；禁止用未来成交量决定开盘成交。');
+    if(!Number.isFinite(r.volume)||r.volume<0)throw Error('成交量必须是非负有效数字：'+r.date);
+    if(r.halted!==undefined&&![0,1].includes(r.halted))throw Error('停牌状态只能为0或1：'+r.date);
   }
+  const nativeByOpen=new Map(input.map(r=>[executionTime(r,native),r]));
   const groups=dailyGroups(data),halts=metadata?sessionCalendar.filter(day=>dailyMeta.get(day)?.halted===1&&!groups.some(g=>g.date===day)).map(day=>{const d=dailyMeta.get(day),x=d.close*d.causalFactor;return {date:day,complete:true,close:d.close,signal_close:x,signal_high:x,signal_low:x,availableAt:day+' 15:00'};}):[],completeDays=[...groups.filter(g=>g.complete),...halts].sort((a,b)=>a.date.localeCompare(b.date)),daily=dailyIndicators(completeDays,c),ind=indicators(data,c);
   const sessionIndex=new Map(sessionCalendar.map((d,i)=>[d,i]));
   const groupByDay=new Map(groups.map((g,i)=>[g.date,{...g,index:i,sessionIndex:sessionIndex.get(g.date)??i}]));
@@ -98,13 +102,13 @@ export function backtest(input,config={}) {
 
   let cash=c.capital,qty=0,entry=null,fees=0,peak=c.capital,desired=false,blocked=0,t1Blocked=0;
   let dailyIndex=-1,pendingExit=null,lastExitDay=-Infinity,peakSignal=0,exposureBars=0;
-  const trades=[],closed=[],curve=[],dailyCurve=[],tPairs=[],inventory=new Inventory();
+  const trades=[],closed=[],curve=[],dailyCurve=[],tPairs=[],orderAttempts=[],inventory=new Inventory();
   const managed=c.strategy==='swing', pyramiding=managed&&c.management!=='base', doingT=managed&&['positive','reverse','adaptive'].includes(c.management)&&c.timeframe!=='1d';
   let tPending=null,tSerial=0,tDay=null,tAttempts=0,lastTIndex=-Infinity,adds=0;
   const feeTotals={commission:0,stamp:0,handling:0,regulatory:0,transfer:0};
   const ledger=new CorporateLedger(actions),benchmarkLedger=new CorporateLedger(actions);
-  let benchmarkQty=Math.floor(c.capital/data[start].open),benchmarkCash=c.capital-benchmarkQty*data[start].open,lastDay=null;
-  const audit={engineVersion:'4.2-configurable-macd',inventoryPolicy:'FIFO sell only prior-date purchases; listed bonus shares immediately available; one shared cash book',feePolicy:'five separate per-order fees; fixed user rates by default; no bundled commission',management:c.management,rulesVersion,qualityReport,snapshotId:c.snapshotId??null,board:c.board,stExcluded:0,unknownSTAssumption:!metadata,corporatePolicy:'record-date entitlement; receivable on ex-date; pay/list date release; rights blocked; fractional bonus floored',dividendTax:'gross or provided net per event; no personalized holding-period tax',timingViolations:0,decisions:0,sameBarRangeUsed:false,sameBarVolumeUsed:false,dailyAvailableAfter:'15:00 Asia/Shanghai',breakoutShift:1};
+  let benchmarkQty=0,benchmarkCash=c.capital,benchmarkStarted=false,lastDay=null;
+  const audit={engineVersion:'4.3-zero-volume-resolution',inventoryPolicy:'FIFO sell only prior-date purchases; listed bonus shares immediately available; one shared cash book',feePolicy:'five separate per-order fees; fixed user rates by default; no bundled commission',management:c.management,rulesVersion,qualityReport,snapshotId:c.snapshotId??null,board:c.board,stExcluded:0,unknownSTAssumption:!metadata,corporatePolicy:'record-date entitlement; receivable on ex-date; pay/list date release; rights blocked; fractional bonus floored',dividendTax:'gross or provided net per event; no personalized holding-period tax',timingViolations:0,decisions:0,sameBarRangeUsed:false,sameBarVolumeUsed:true,dailyAvailableAfter:'15:00 Asia/Shanghai',breakoutShift:1};
   let feeDay=c.from;
   const fee=(amount,sell)=>orderFees(amount,sell,c,feeDay).total;
   const charge=(amount,sell)=>{const detail=orderFees(amount,sell,c,feeDay);for(const k of Object.keys(feeTotals))feeTotals[k]+=detail[k];fees+=detail.total;return detail;};
@@ -123,6 +127,11 @@ export function backtest(input,config={}) {
     if(c.strategy==='rsi')return ind.rsi[i]<c.rsiBuy?true:ind.rsi[i]>c.rsiSell?false:held;
     return ind.xs[i]<ind.mid[i]-c.bbMult*ind.std[i]?true:ind.xs[i]>=ind.mid[i]?false:held;
   }
+  // Order planning works on a provisional book using opening-known inputs.
+  // Only at the closing event is the native opening interval's liquidity
+  // observed. A no-print interval rolls back ALL provisional accounting.
+  function checkpoint(){return {cash,qty,entry:entry?{...entry}:null,fees,feeTotals:{...feeTotals},lots:inventory.lots.map(l=>({...l})),trades:trades.length,closed:closed.length,tPairs:tPairs.length,tPending,tSerial,tAttempts,lastTIndex,adds,pendingExit,peakSignal,lastExitDay};}
+  function restore(x){cash=x.cash;qty=x.qty;entry=x.entry;fees=x.fees;Object.assign(feeTotals,x.feeTotals);inventory.lots=x.lots;trades.length=x.trades;closed.length=x.closed;tPairs.length=x.tPairs;tPending=x.tPending;tSerial=x.tSerial;tAttempts=x.tAttempts;lastTIndex=x.lastTIndex;adds=x.adds;pendingExit=x.pendingExit;peakSignal=x.peakSignal;lastExitDay=x.lastExitDay;}
   for(let i=start;i<=end;i++) {
     const r=data[i],prev=data[i-1],day=dayOf(r),g=groupByDay.get(day);
     const execAt=executionTime(r,c.timeframe),sourceAt=closeTime(prev);feeDay=day;
@@ -166,7 +175,10 @@ export function backtest(input,config={}) {
     const available=inventory.available(day);
     if(sell&&available<qty)t1Blocked++;
     if(sell)cancelT('趋势 / 风控离场，中止配对',execAt);
+    if(tDay!==day){tDay=day;tAttempts=0;}
+    if(tPending&&tPending.day!==day&&actions.some(a=>a.exDate>tPending.day&&a.exDate<=day))cancelT('跨除权日，转为未配对库存',execAt);
     const timing={signalTime:pendingExit?.signalTime??sourceAt,executionTime:execAt,dailySignalTime:pendingExit?pendingExit.dailySignalTime:c.strategy==='swing'?d?.availableAt:null};
+    const book=checkpoint();
     if(sell&&tradeable&&available>0) {
       const n=Math.min(qty,available,rule.maxOrder),price=Math.max(down,r.open*(1-c.slippage/10000)),amount=n*price,f=fee(amount,true);
       cash+=amount-f;const feeBreakdown=charge(amount,true);inventory.sell(n,day);
@@ -197,13 +209,13 @@ export function backtest(input,config={}) {
     function sale(n,purpose,why,tId=null){const sellableBefore=inventory.available(day),amount=n*sellPrice,feeBreakdown=charge(amount,true);cash+=amount-feeBreakdown.total;qty-=n;inventory.sell(n,day);entry.proceeds+=amount-feeBreakdown.total;const t={date:execAt,side:'卖出',price:sellPrice,quantity:n,amount,fee:feeBreakdown.total,feeBreakdown,purpose,tId,sellableBefore,reason:why,pnl:null,...timing};trades.push(t);return t;}
     function affordable(n){while(n>=rule.minBuy&&n*buyPrice+fee(n*buyPrice,false)>cash)n-=rule.step;return n;}
     // A cross-day corporate action changes share units; do not fabricate a paired T profit.
-    if(tPending&&tPending.day!==day&&actions.some(a=>a.exDate>tPending.day&&a.exDate<=day))cancelT('跨除权日，转为未配对库存',execAt);
-    let managedOrder=false;
+    let managedOrder=false,tExpiryDue=false;
     if(tPending&&entry&&desired){
       const positive=tPending.direction==='positive',change=ind.xs[i-1]/tPending.signalPrice-1;
       const target=positive?change>=c.tTarget/100:change<=-c.tTarget/100;
       const loss=positive?change<=-c.tStop/100:change>=c.tStop/100;
       const expired=i-tPending.index>=c.tMaxBars||day>tPending.day||execAt.slice(11)>=(c.timeframe==='15m'?'14:45':'14:55');
+      tExpiryDue=expired;
       if(target||loss||expired){
         const n=tPending.quantity,can=positive?canSell&&inventory.available(day)>=n:canBuy&&affordable(n)>=n&&riskQuantity(n,buyPrice,factor,stopSignal,stockEquity())>=n&& (qty+n)*buyPrice+ledger.locked()*buyPrice<=stockEquity()*c.allocation/100;
         if(can){const second=positive?sale(n,'t-close',loss?'正 T 止损':expired?'正 T 超时收束':'正 T 反弹减回',tPending.id):purchase(n,'t-close',loss?'反 T 止损回补':expired?'反 T 超时回补':'反 T 回落回补',tPending.id);
@@ -218,7 +230,6 @@ export function backtest(input,config={}) {
       n=riskQuantity(n,buyPrice,factor,stopSignal,equity);n=affordable(Math.floor(n/rule.step)*rule.step);
       if(n>=rule.minBuy){purchase(n,'add','趋势延伸，风险预算内加仓');entry.lastAddSignal=buyPrice*factor;entry.lastAddDay=g.sessionIndex;entry.addCount++;adds++;managedOrder=true;}
     }
-    if(tDay!==day){tDay=day;tAttempts=0;}
     if(doingT&&entry&&qty>0&&desired&&trendOK&&eligible&&!tPending&&!managedOrder&&tAttempts<c.tDailyPairs&&i-lastTIndex>1&&dayOf(prev)===day&&execAt.slice(11)<'14:30'&&ind.fast[i-1]>0){
       const deviation=ind.xs[i-1]/ind.fast[i-1]-1;
       const positive=['positive','adaptive'].includes(c.management)&&deviation<=-c.tDeviation/100&&ind.xs[i-1]>ind.xs[i-2];
@@ -238,6 +249,15 @@ export function backtest(input,config={}) {
         }
       }
     }
+    // Resolution is separate from submission. Never use volume to create a
+    // suspension flag or suppress the opening order intent. For 15m/daily
+    // aggregation, a zero-volume first native 5m interval cannot prove a fill
+    // at the aggregate open, even when later intervals have trades.
+    const openingBar=nativeByOpen.get(execAt)??r,noPrint=openingBar.volume===0;
+    const planned=trades.slice(book.trades);
+    for(const t of planned){const orderId='order-'+(orderAttempts.length+1);orderAttempts.push({id:orderId,submittedAt:execAt,signalTime:t.signalTime,dailySignalTime:t.dailySignalTime,side:t.side,purpose:t.purpose,requestedQuantity:t.quantity,estimatedPrice:t.price,status:noPrint?'unfilled':'filled',resolvedAt:closeTime(r),evidenceAvailableAt:closeTime(openingBar),evidenceBar:openingBar.date,reason:noPrint?'原生开盘区间成交量为0；未成交，不扣费用':'原生开盘区间有成交；按开盘价及滑点估算，不模拟排队或容量'});if(!noPrint){t.orderId=orderId;t.submittedAt=execAt;t.confirmationTime=closeTime(r);}}
+    if(noPrint){restore(book);if(tExpiryDue&&tPending){cancelT('到期收束遇零成交量，未成交；保留库存',closeTime(r));lastTIndex=i;}}
+    if(!benchmarkStarted&&r.halted!==1&&!noPrint){benchmarkQty=Math.floor(c.capital/r.open);benchmarkCash=c.capital-benchmarkQty*r.open;benchmarkStarted=true;}
     // CLOSE becomes observable only now; it may affect equity now and the NEXT opening decision.
     if(qty){peakSignal=Math.max(peakSignal,ind.xs[i]);exposureBars++;}
     const equity=cash+qty*r.close+ledger.value(r.close);peak=Math.max(peak,equity);
@@ -255,6 +275,8 @@ export function backtest(input,config={}) {
   const maxdd=curve.reduce((m,r)=>Math.min(m,r.drawdown),0),wins=closed.filter(t=>t.pnl>0),losses=closed.filter(t=>t.pnl<0);
   const incomplete=groups.filter(g=>!g.complete).map(g=>g.date);
   const warnings=[];
+  const zeroVolumeBars=input.filter(r=>r.volume===0&&r.halted!==1),unfilled=orderAttempts.filter(o=>o.status==='unfilled');
+  if(zeroVolumeBars.length)warnings.push(`原生数据有 ${zeroVolumeBars.length} 根非停牌零成交量K线；保留原始价格与状态。开盘订单先按历史信号提交，执行周期结束后核验首个原生区间；${unfilled.length} 笔开盘估算订单未成交且费用为0，不改用后续区间成交量证明开盘成交。`);
   if(qualityReport?.warnings?.length)warnings.push('带量价警告回测（'+qualityReport.warningCount+'项）：'+qualityReport.warnings.map(x=>x.message+'（'+x.count+'）').join('；')+'。仍使用原始K线，未修复、未按日线缩放；差异可能影响突破、ATR、做T和估值，不能认定对结果无影响。');
   if(metadata&&c.dataMode==='single')warnings.push('单标的回测：不限制也未核验历史沪深300成员资格；历史ST、停牌、分钟完整性和公司行动仍按完整数据校验。');
   if(actions.some(a=>a.cashBasis==='gross'))warnings.push('股息按税前金额核算，未计算个人持有期补税。');
@@ -262,8 +284,9 @@ export function backtest(input,config={}) {
   if(incomplete.length)warnings.push(`${incomplete.length} 个交易日的分钟网格不完整；这些日线不会用于波段信号，缺少上一完整日线时禁止新开仓。`);
   if(c.strategy==='swing'&&completeDays.length===0)warnings.push('没有完整日线，无法形成大波段信号。');
   if(managed&&c.timeframe==='1d'&&['positive','reverse','adaptive'].includes(c.management))warnings.push('日线无法执行盘中 T，当前只运行底仓与分批加仓。');
-  return {config:c,curve,dailyCurve,trades,closed,tPairs,feeTotals,audit,warnings,corporateEvents:ledger.log,metadata,
-    dataInfo:{nativeTimeframe:native,executionTimeframe:c.timeframe,inputBars:input.length,executionBars:data.length,completeDailyBars:completeDays.length,incompleteDays:incomplete},
+  Object.assign(audit,{engineVersion:'4.3-zero-volume-resolution',sameBarVolumeUsed:true,orderDecisionSameBarVolumeUsed:false,executionVolumePolicy:'submit from opening-known information; resolve on execution-bar close using native opening interval; zero volume means no fill/fees; positive volume does not prove queue priority or capacity',unfilledOrders:unfilled.length});
+  return {config:c,curve,dailyCurve,trades,closed,tPairs,orderAttempts,feeTotals,audit,warnings,corporateEvents:ledger.log,metadata,
+    dataInfo:{nativeTimeframe:native,executionTimeframe:c.timeframe,inputBars:input.length,executionBars:data.length,completeDailyBars:completeDays.length,incompleteDays:incomplete,zeroVolumeBars:zeroVolumeBars.length,zeroVolumeSamples:zeroVolumeBars.slice(0,15).map(r=>r.date)},
     metrics:{total,annual,maxdd,sharpe:sd>0&&tradingDays>1?mean/sd*Math.sqrt(252):null,winrate:closed.length?wins.length/closed.length:null,
       profitFactor:losses.length?wins.reduce((s,x)=>s+x.pnl,0)/-losses.reduce((s,x)=>s+x.pnl,0):null,
       adds,tPaired:tPairs.filter(t=>t.status==='paired').length,tUnmatched:tPairs.filter(t=>t.status==='unmatched').length,tNet:tPairs.filter(t=>t.status==='paired').reduce((s,t)=>s+t.pnl,0),tFees:trades.filter(t=>t.purpose?.startsWith('t-')).reduce((s,t)=>s+t.fee,0),fees,blocked,t1Blocked,equity:last.equity,quantity:qty,cash,benchmark:last.benchmark-1,excess:total-(last.benchmark-1),volatility:sd*Math.sqrt(252),
