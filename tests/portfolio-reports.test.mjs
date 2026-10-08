@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {FileBucket} from '../scripts/local-server.mjs';
 import worker from '../server/worker.mjs';
-import {portfolioBacktest} from '../dist/portfolio.mjs';
+import {portfolioBacktest,portfolioVersion} from '../dist/portfolio.mjs';
 import {fixture} from './fixture.mjs';
 test('immutable portfolio report storage verifies arithmetic, requires saved snapshots, rejects cross-origin writes',async()=>{
  const dir=await mkdtemp(path.join(tmpdir(),'ashare-portfolio-report-')),bucket=new FileBucket(dir),b=fixture(80),id='a'.repeat(64),r=portfolioBacktest([{symbol:'600519',data:b,snapshotId:id}],{from:b.calendar[65],to:b.calendar.at(-1),dataMode:'single',strategies:['ma'],fast:2,slow:3,timeframe:'15m',maxHoldings:1}),env={BUCKET:bucket};
@@ -17,5 +17,16 @@ test('immutable portfolio report storage verifies arithmetic, requires saved sna
   const read=await worker.fetch(new Request('http://localhost/api/portfolio/reports/'+receipt.id),env);assert.equal(read.status,200);assert.deepEqual((await read.json()).report,r);
   const invalid=structuredClone(r);invalid.curve[2].cash-=100;assert.equal((await worker.fetch(req(invalid),env)).status,400);
   assert.equal((await worker.fetch(req(r,'https://example.com'),env)).status,403);
+ }finally{await rm(dir,{recursive:true,force:true});}
+});
+test('OR report mode and actual trigger evidence persist; tampering fails and legacy AND reports remain immutable',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'ashare-portfolio-modes-')),bucket=new FileBucket(dir),b=fixture(80),id='b'.repeat(64),inputs=[{symbol:'600519',data:b,snapshotId:id}],c={from:b.calendar[65],to:b.calendar.at(-1),dataMode:'single',strategies:['ma','rsi'],entryMode:'any',fast:2,slow:3,timeframe:'15m',maxHoldings:1},r=portfolioBacktest(inputs,c),env={BUCKET:bucket};
+ const req=report=>new Request('http://localhost/api/portfolio/reports',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({report})});
+ try{
+  await bucket.put('snapshots/'+id+'.json',JSON.stringify(b));assert.equal(r.engineVersion,portfolioVersion);assert.ok(r.trades.some(t=>t.side==='买入'));
+  const saved=await worker.fetch(req(r),env);assert.equal(saved.status,201);const receipt=await saved.json();const stored=await (await worker.fetch(new Request('http://localhost/api/portfolio/reports/'+receipt.id),env)).json();assert.deepEqual(stored.report,r);assert.equal(stored.report.config.entryMode,'any');
+  for(const edit of [x=>x.config.entryMode='all',x=>x.config.entryMode='or',x=>x.trades.find(t=>t.side==='买入').entryStrategies=['rsi'],x=>x.trades.find(t=>t.side==='买入').entryMode='all',x=>x.trades.find(t=>t.side==='买入').confirmations.ma=false,x=>x.engineVersion='1.0-shared-account',x=>delete x.config.entryMode]){const bad=structuredClone(r);edit(bad);assert.equal((await worker.fetch(req(bad),env)).status,400);}
+  const legacy=portfolioBacktest(inputs,{...c,strategies:['ma'],entryMode:'all'});legacy.engineVersion='1.0-shared-account';legacy.audit.engineVersion='1.0-shared-account';delete legacy.config.entryMode;delete legacy.audit.entryMode;for(const t of [...legacy.trades,...legacy.orderAttempts]){delete t.entryMode;delete t.entryStrategies;}
+  const old=await worker.fetch(req(legacy),env);assert.equal(old.status,201);const oldId=(await old.json()).id;assert.deepEqual((await (await worker.fetch(new Request('http://localhost/api/portfolio/reports/'+oldId),env)).json()).report,legacy);const again=await worker.fetch(req(legacy),env);assert.equal(again.status,200);assert.equal((await again.json()).id,oldId);
  }finally{await rm(dir,{recursive:true,force:true});}
 });

@@ -2,8 +2,18 @@ import {indicators,sma} from './engine.mjs';
 import {dailyGroups,executionTime} from './data.mjs';
 
 export const strategyNames={swing:'大波段趋势',ma:'双均线',macd:'MACD',rsi:'RSI超卖',boll:'布林下轨'};
+export const entryModeNames={all:'共同确认',any:'任一策略满足'};
+export function validateEntryMode(mode='all'){
+ if(typeof mode!=='string'||!Object.hasOwn(entryModeNames,mode))throw Error('入场组合方式无效：请选择共同确认或任一策略满足。');
+ return mode;
+}
+export function entryDecision(signals,strategies,mode='all'){
+ mode=validateEntryMode(mode);
+ const triggered=strategies.filter(k=>signals[k]===true);
+ return {matched:triggered.length>0&&(mode==='any'||triggered.length===strategies.length),strategies:triggered};
+}
 export function validateCombination(strategies){
- if(!Array.isArray(strategies)||!strategies.length||strategies.length>5||new Set(strategies).size!==strategies.length||strategies.some(s=>!Object.hasOwn(strategyNames,s)))throw Error('请选择1–5个不重复的策略。');
+ if(!Array.isArray(strategies)||!strategies.length||strategies.length>5||new Set(strategies).size!==strategies.length||strategies.some(s=>typeof s!=='string'||!Object.hasOwn(strategyNames,s)))throw Error('请选择1–5个不重复的策略。');
  return [...strategies];
 }
 function dailySignals(days,c){

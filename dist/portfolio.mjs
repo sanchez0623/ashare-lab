@@ -6,13 +6,13 @@ import {knownLimits,buyQuantity,rulesVersion} from './rules.mjs';
 import {orderFees} from './fees.mjs';
 import {CorporateLedger} from './corporate.mjs';
 import {Inventory} from './inventory.mjs';
-import {combinationSignals,validateCombination,strategyNames} from './combination.mjs';
+import {combinationSignals,validateCombination,strategyNames,validateEntryMode,entryDecision,entryModeNames} from './combination.mjs';
 
-export const portfolioVersion='1.0-shared-account';
-export const portfolioDefaults={strategies:['swing','macd'],maxHoldings:3,exitMode:'trend',scope:'single-security'};
+export const portfolioVersion='1.1-entry-modes-shared-account';
+export const portfolioDefaults={strategies:['swing','macd'],entryMode:'all',maxHoldings:3,exitMode:'trend',scope:'single-security'};
 export function portfolioBacktest(inputs,config={}){
  const c={...defaults,...portfolioDefaults,...config,management:'base',rulesMode:'historical'};
- c.strategies=validateCombination(c.strategies);
+ c.strategies=validateCombination(c.strategies);c.entryMode=validateEntryMode(c.entryMode);
  // This is direct simulation, not training. Unused legacy management and
  // training thresholds cannot prevent a valid equal-slot simulation.
  const unused=['minTrades','minProfitFactor','maxDrawdown','objective','baseAllocation','addAllocation','maxAdds','addATR','addSpacing','riskBudget','tAllocation','tDeviation','tTarget','tStop','tMaxBars','tDailyPairs','tCostBuffer'];
@@ -92,8 +92,8 @@ export function portfolioBacktest(inputs,config={}){
     if(why)s.pendingExit=s.pendingExit??{reason:why,signalTime:sig.signalTime,dailySignalTime:sig.dailySignalTime};
    }
    const sell=s.qty>0&&!!s.pendingExit;
-   const wants=c.strategies.every(k=>sig.entry[k]),age=s.calendar.indexOf(day)-s.lastExit;
-   const buy=s.qty===0&&!s.entry&&wants&&age>(swing?c.cooldownDays:-1);
+   const entry=entryDecision(sig.entry,c.strategies,c.entryMode),age=s.calendar.indexOf(day)-s.lastExit;
+   const buy=s.qty===0&&!s.entry&&entry.matched&&age>(swing?c.cooldownDays:-1);
    if(!sell&&!buy)continue;
    const limits=knownLimits(r,r.prev_close??s.data[i-1].close,{...c,board:s.board}),{up,down,rule}=limits;
    if(buy&&(r.isST===1||c.scope==='hs300'&&(r.isHS300!==1||r.membershipFresh!==1))){skipped.st++;continue;}
@@ -106,8 +106,8 @@ export function portfolioBacktest(inputs,config={}){
    const feeConfig={...c,board:s.board};let f=orderFees(n*price,sell,feeConfig,day);
    if(buy)while(n>=rule.minBuy&&(n*price+f.total>cash-reservedCash+.000001||n*price+f.total>budget+.000001)){n-=rule.step;f=orderFees(n*price,false,feeConfig,day);}
    if(!n||buy&&n<rule.minBuy){skipped.cash++;continue;}
-   const trigger=sell?s.pendingExit.reason:c.strategies.map(k=>strategyNames[k]).join(' + ')+'共同确认';
-   const o={id:'portfolio-order-'+(orderAttempts.length+1),symbol:s.symbol,side:sell?'卖出':'买入',quantity:n,amount:n*price,price,fee:f.total,feeBreakdown:f,trigger,submittedAt:at,executionTime:at,signalTime:sell?s.pendingExit.signalTime:sig.signalTime,dailySignalTime:swing?(sell?s.pendingExit.dailySignalTime:sig.dailySignalTime):null,signalFill:price*(r.signal_factor??(s.data[i-1].signal_close??s.data[i-1].close)/s.data[i-1].close),sellableBefore:available,status:'pending',confirmations:{...sig.entry}};
+   const trigger=sell?s.pendingExit.reason:entry.strategies.map(k=>strategyNames[k]).join(c.entryMode==='all'?' + ':'、')+(c.entryMode==='all'?'共同确认':'触发入场（任一满足）');
+   const o={id:'portfolio-order-'+(orderAttempts.length+1),symbol:s.symbol,side:sell?'卖出':'买入',quantity:n,amount:n*price,price,fee:f.total,feeBreakdown:f,trigger,submittedAt:at,executionTime:at,signalTime:sell?s.pendingExit.signalTime:sig.signalTime,dailySignalTime:swing?(sell?s.pendingExit.dailySignalTime:sig.dailySignalTime):null,signalFill:price*(r.signal_factor??(s.data[i-1].signal_close??s.data[i-1].close)/s.data[i-1].close),sellableBefore:available,status:'pending',...(sell?{}:{entryMode:c.entryMode,entryStrategies:entry.strategies}),confirmations:{...sig.entry}};
    s.pending=o;orderAttempts.push(o);if(buy)reservedCash+=o.amount+o.fee;maxHeld=Math.max(maxHeld,heldCount());
   }
  }
@@ -117,19 +117,20 @@ export function portfolioBacktest(inputs,config={}){
  const residual=last.equity-c.capital-contributions.reduce((n,s)=>n+s.pnl,0);if(Math.abs(residual)>.011)throw Error('组合收益贡献与资产核对失败。');
  if(synthetic.length)warnings.push('合成多标的演示，仅用于检查操作流程，不能证明真实收益。');
  if(c.scope==='single-security')warnings.push('自选股票池，未核验历史沪深300资格；事后选择股票会产生选择偏差。');
- if(c.strategies.includes('swing')&&(c.strategies.includes('rsi')||c.strategies.includes('boll')))warnings.push('突破趋势与超卖条件可能冲突，共同确认会显著减少入场；零交易不代表系统故障。');
+ if(c.entryMode==='all'&&c.strategies.includes('swing')&&(c.strategies.includes('rsi')||c.strategies.includes('boll')))warnings.push('突破趋势与超卖条件可能冲突，共同确认会显著减少入场；零交易不代表系统故障。');
+ if(c.entryMode==='any')warnings.push('任一所选策略满足即可入场，不要求其他策略同时确认；交易频率和费用可能增加。退出条件独立生效，所选大波段的ATR、跳空与冷却风控仍适用。');
  if(stocks.some(s=>s.actions.some(a=>a.cashBasis==='gross')))warnings.push('股息按事件提供的税前金额入账，未计算个人持有期补税。');
  warnings.push('等额预算为当时净资产×总仓位上限÷最大持仓数；持仓上涨后可超过初始权重，不自动再平衡。资金不足或满仓时按证券代码顺序，未成交订单到原生区间结束才释放预留现金。');
  const wins=closed.filter(t=>t.pnl>0),losses=closed.filter(t=>t.pnl<0),total=last.nav-1;
  return {schemaVersion:1,kind:'portfolio',engineVersion:portfolioVersion,config:c,curve,dailyCurve,trades,closed,orderAttempts,corporateEvents,contributions,feeTotals,warnings,
   inputs:stocks.map(s=>({symbol:s.symbol,snapshotId:s.snapshotId,nativeTimeframe:s.native,bars:s.data.length,quality:s.quality,warmup:s.warm})),
   metrics:{total,annual:last.nav**(252/dailyCurve.length)-1,maxdd:curve.reduce((m,p)=>Math.min(m,p.drawdown),0),sharpe:sd?mean/sd*Math.sqrt(252):null,equity:last.equity,cash,fees,closedTrades:closed.length,winrate:closed.length?wins.length/closed.length:null,wilsonLower:wilson(wins.length,closed.length),profitFactor:losses.length?wins.reduce((n,t)=>n+t.pnl,0)/-losses.reduce((n,t)=>n+t.pnl,0):null,expectancy:closed.length?closed.reduce((n,t)=>n+t.pnl,0)/closed.length:null,maxHeld,positions:contributions.filter(s=>s.quantity+s.lockedQuantity>0).length,skipped},
-  audit:{engineVersion:portfolioVersion,rulesVersion,accounting:{status:'passed',contributionResidual:residual},timingViolations:0,sharedCapital:true,sameBarRangeUsed:false,orderDecisionSameBarVolumeUsed:false,executionPolicy:'reserve at open; resolve after first native interval; failed buys release reserves; sale proceeds available only after resolution',priority:'ascending security code; no future return ranking',inventoryPolicy:'per-security FIFO T+1; bonus shares released on listing date',management:'equal entry slots; no add/T or automatic rebalance',selectionPolicy:'all selected entry conditions; trend exit when swing selected, otherwise any selected exit; stop/take/ST/constituent exit override'},
+  audit:{engineVersion:portfolioVersion,rulesVersion,accounting:{status:'passed',contributionResidual:residual},timingViolations:0,sharedCapital:true,sameBarRangeUsed:false,orderDecisionSameBarVolumeUsed:false,executionPolicy:'reserve at open; resolve after first native interval; failed buys release reserves; sale proceeds available only after resolution',priority:'ascending security code; no future return ranking',inventoryPolicy:'per-security FIFO T+1; bonus shares released on listing date',management:'equal entry slots; no add/T or automatic rebalance',entryMode:c.entryMode,selectionPolicy:(c.entryMode==='all'?'all selected entry conditions':'at least one selected entry condition')+'; configured exit mode '+c.exitMode+'; stop/take/ST/constituent exit override'},
   period:{from:c.from,to:c.to,tradingDays:dailyCurve.length,bars:curve.length}};
 }
 export function comparePortfolio(inputs,config={}){
  const result=portfolioBacktest(inputs,config),singleStrategy=portfolioBacktest(inputs,{...result.config,strategies:[result.config.strategies[0]]});
- const rows=[{name:'共同确认 · 共享资金组合',metrics:result.metrics},{name:'首个策略 · 同股票池同资金',metrics:singleStrategy.metrics}];
- for(const input of [...inputs].sort((a,b)=>(a.symbol??a.data.metadata.symbol).localeCompare(b.symbol??b.data.metadata.symbol))){const r=portfolioBacktest([input],{...result.config,maxHoldings:1});rows.push({name:(input.symbol??input.data.metadata.symbol)+' · 单标的共同确认',metrics:r.metrics});}
+ const mode=entryModeNames[result.config.entryMode],rows=[{name:mode+' · 共享资金组合',metrics:result.metrics},{name:'首个策略 · 同股票池同资金',metrics:singleStrategy.metrics}];
+ for(const input of [...inputs].sort((a,b)=>(a.symbol??a.data.metadata.symbol).localeCompare(b.symbol??b.data.metadata.symbol))){const r=portfolioBacktest([input],{...result.config,maxHoldings:1});rows.push({name:(input.symbol??input.data.metadata.symbol)+' · 单标的'+mode,metrics:r.metrics});}
  return {...result,comparison:{rows,selectionRule:'user specified stocks and strategies; no automatic selection from these results',basis:'same dates, capital, five fees, slippage and equal-slot engine; independent baseline accounts, never averaged into portfolio'},baselineCurve:singleStrategy.curve.map(p=>({date:p.date,nav:p.nav}))};
 }

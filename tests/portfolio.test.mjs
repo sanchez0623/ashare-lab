@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {fixture,withEvent} from './fixture.mjs';
 import {portfolioBacktest,comparePortfolio} from '../dist/portfolio.mjs';
 import {orderFees} from '../dist/fees.mjs';
+import {entryDecision,validateEntryMode} from '../dist/combination.mjs';
 
 const config=b=>({strategy:'swing',timeframe:'5m',dataMode:'single',from:b.calendar[65],to:b.calendar.at(-1),strategies:['ma'],maxHoldings:2,capital:100000,dailyFast:5,dailySlow:20,fast:2,slow:3,stop:8,take:0});
 function stock(symbol='600519',n=80){const b=fixture(n);b.metadata.symbol=symbol;return {symbol,data:b,snapshotId:symbol.padEnd(64,'a')};}
@@ -28,6 +29,36 @@ test('joint confirmation uses AND at entry; single-strategy and multi-stock base
  assert.equal(r.comparison.rows.length,4);assert.ok(r.trades.filter(t=>t.side==='买入').every(t=>t.confirmations.ma&&t.confirmations.macd));
  const conflict=portfolioBacktest(inputs,{...c,strategies:['ma','rsi']});assert.equal(conflict.trades.length,0);assert.equal(conflict.metrics.total,0);
  accountAudit(r);
+});
+test('entry truth table includes only selected strategies and rejects invalid modes',()=>{
+ const states=[{ma:false,rsi:false,macd:true},{ma:true,rsi:false,macd:false},{ma:false,rsi:true,macd:false},{ma:true,rsi:true,macd:false}];
+ for(const [i,signals]of states.entries()){
+  assert.equal(entryDecision(signals,['ma','rsi'],'all').matched,i===3);
+  assert.equal(entryDecision(signals,['ma','rsi'],'any').matched,i!==0);
+ }
+ assert.deepEqual(entryDecision(states[1],['ma','rsi'],'any'),{matched:true,strategies:['ma']});assert.equal(validateEntryMode(),'all');
+ for(const mode of [null,'','and','or','ALL',0,false,['all'],{}])assert.throws(()=>validateEntryMode(mode),/入场组合方式/);
+});
+test('OR combines conflicting signals in one account, attributes actual triggers and labels the report',()=>{
+ const inputs=[stock('600188'),stock('600519'),stock('000001')],c={...config(inputs[0].data),strategies:['ma','rsi'],entryMode:'any'},r=comparePortfolio(inputs,c);
+ assert.equal(portfolioBacktest(inputs,{...c,entryMode:'all'}).trades.length,0);assert.ok(r.trades.length>0);assert.ok(r.metrics.maxHeld<=c.maxHoldings);assert.equal(r.config.entryMode,'any');assert.equal(r.audit.entryMode,'any');assert.match(r.comparison.rows[0].name,/任一策略满足/);assert.ok(r.comparison.rows.slice(2).every(row=>row.name.includes('任一策略满足')));
+ for(const t of r.trades.filter(t=>t.side==='买入')){assert.equal(t.entryMode,'any');assert.deepEqual(t.entryStrategies,c.strategies.filter(k=>t.confirmations[k]===true));assert.ok(t.entryStrategies.length);assert.match(t.reason,/任一满足/);assert.ok(!t.reason.includes('共同确认'));}
+ assert.ok(r.trades.some(t=>t.side==='买入'&&t.entryStrategies.length===1&&t.entryStrategies[0]==='ma'&&!t.reason.includes('RSI')));
+ assert.deepEqual(portfolioBacktest([...inputs].reverse(),c),portfolioBacktest(inputs,c));accountAudit(r);
+ const none=portfolioBacktest(inputs,{...c,strategies:['rsi','boll']});assert.equal(none.trades.length,0,'unselected MA and MACD must not trigger OR');
+});
+test('missing mode preserves AND, one selected strategy has identical cash flows, and OR still requires all warmup',()=>{
+ const a=stock(),c=config(a.data),defaultResult=portfolioBacktest([a],c),all=portfolioBacktest([a],{...c,entryMode:'all'}),any=portfolioBacktest([a],{...c,entryMode:'any'});
+ assert.deepEqual(defaultResult,all);assert.deepEqual(any.metrics,all.metrics);assert.deepEqual(any.curve,all.curve);assert.deepEqual(any.contributions,all.contributions);
+ assert.deepEqual(any.trades.map(t=>[t.date,t.side,t.price,t.quantity,t.fee]),all.trades.map(t=>[t.date,t.side,t.price,t.quantity,t.fee]));
+ assert.throws(()=>portfolioBacktest([a],{...c,entryMode:'any',strategies:['ma','swing'],dailySlow:70}),/预热不足/);
+ assert.throws(()=>portfolioBacktest([a],{...c,entryMode:'or'}),/入场组合方式/);accountAudit(any);
+});
+test('OR cannot fill zero liquidity or change orders and NAV before future evidence is available',()=>{
+ const a=stock(),c={...config(a.data),strategies:['ma','rsi'],entryMode:'any',maxHoldings:1},before=portfolioBacktest([a],c),cut=a.data.calendar[75],changed=structuredClone(a);
+ for(const r of changed.data.bars)if(r.date.slice(0,10)>=cut){r.close*=1.01;r.high=Math.max(r.high,r.close)+.01;r.volume*=2;}
+ const after=portfolioBacktest([changed],c);assert.deepEqual(after.trades.filter(t=>t.confirmationTime.slice(0,10)<cut),before.trades.filter(t=>t.confirmationTime.slice(0,10)<cut));assert.deepEqual(after.curve.filter(t=>t.date.slice(0,10)<cut),before.curve.filter(t=>t.date.slice(0,10)<cut));
+ const empty=structuredClone(a);empty.data.bars.find(r=>r.date===c.from+' 09:35').volume=0;const unfilled=portfolioBacktest([empty],c),o=unfilled.orderAttempts[0];assert.equal(o.status,'unfilled');assert.ok(!unfilled.trades.some(t=>t.id===o.id));accountAudit(unfilled);
 });
 test('first native zero-volume interval cannot fill a 15-minute order or charge fees; reserve releases later',()=>{
  const a=stock(),b=stock('600188'),c={...config(a.data),timeframe:'15m',maxHoldings:1};

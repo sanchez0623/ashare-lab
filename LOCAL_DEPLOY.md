@@ -4,7 +4,20 @@
 
 这个包包含完整源码、已构建网页、本地文件仓库和 Python 采集器。默认资金100万元，五项费用、波段加仓和正反T与已发布版相同；不对接交易。打开网页不需要登录 Sites / Cloudflare，也不需要云端数据库。本地Node服务统一调度Python采集和后台回测；正常操作只需启动一个服务。BaoStock为匿名免费接口，无需API Key或Token。
 
-本版新增“组合回测”：输入多个代码、日期、共同确认策略与最大持仓数，即可用同一资金账户回测已采集快照。完整组合报告保存在 `.local-data/warehouse/portfolio-reports/`，与行情及后台任务一起备份。更新需替换完整源码和构建输出，保留原 `.local-data`、`collector/.venv` 和本地密钥配置。
+本版新增“组合回测”：输入多个代码、日期、策略及入场组合方式与最大持仓数，即可用同一资金账户回测已采集快照。完整组合报告保存在 `.local-data/warehouse/portfolio-reports/`，与行情及后台任务一起备份。更新需替换完整源码和构建输出，保留原 `.local-data`、`collector/.venv` 和本地密钥配置。
+
+## 从GitHub拉取更新
+
+后续直接更新GitHub `main`，不再提供新的部署包。停止本地服务，在源码仓库目录执行：
+
+```powershell
+git pull origin main
+npm ci
+npm run build:app
+.\start-local.cmd
+```
+
+`build:app` 构建网页、后台和HTML说明书，不打包ZIP。首次安装开发依赖须执行 `npm ci`；只拉源码而未重新构建，启动时仍会加载旧界面和后台。保留 `.local-data`、`collector/.venv` 及本地密钥配置，旧行情与报告无需重采。
 
 ## 1. 安装并启动网页
 
