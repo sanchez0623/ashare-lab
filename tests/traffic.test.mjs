@@ -9,7 +9,9 @@ import worker from '../server/worker.mjs';
 import {trafficUsageHTML} from '../dist/traffic-ui.mjs';
 test('monitor labels host-only counters, legacy attribution and HTTP egress uncertainty, escaping data',()=>{
  const html=trafficUsageHTML({day:'2026-10-07',requests:5,budget:10000,ipRequests:2,unattributedRequests:3,monitorIP:{ip:'9.9.9.9',source:'http-echo',httpProxyDetected:true,note:'<img src=x>'}});
- assert.match(html,/本机日累计 5/);assert.match(html,/TCP 出口公网 IP：未核验/);assert.match(html,/HTTP候选 IP：9.9.9.9/);assert.ok(!html.includes('监控公网 IP：9.9.9.9'));assert.match(html,/HTTP echo 候选/);assert.match(html,/本机已记录请求 2/);assert.match(html,/3 次旧版/);assert.match(html,/未包含.*其他设备或项目/);assert.match(html,/均不清零/);assert.ok(!html.includes('<img'));assert.match(html,/&lt;img/);
+ assert.match(html,/本机日累计 5/);assert.match(html,/TCP 出口公网 IP：未核验/);assert.match(html,/HTTP候选 IP：9.9.9.9/);assert.ok(!html.includes('监控公网 IP：9.9.9.9'));assert.match(html,/HTTP echo 直连探测/);assert.match(html,/检测到 HTTP 代理（探测与BaoStock连接均不使用）/);assert.match(html,/本机已记录请求 2/);assert.match(html,/3 次旧版/);assert.match(html,/未包含.*其他设备或项目/);assert.match(html,/均不清零/);assert.ok(!html.includes('<img'));assert.match(html,/&lt;img/);
+ const fallback=trafficUsageHTML({day:'2026-10-07',requests:2,budget:10000,ipRequests:0,monitorIP:{ip:null,source:'interface-only',interfaceIP:'192.168.1.2',proxyExitIP:'13.214.76.191',httpProxyDetected:true,note:'未识别本机直连公网IPv4'}});
+ assert.match(fallback,/TCP 出口公网 IP：未核验/);assert.match(fallback,/网卡诊断地址 192\.168\.1\.2/);assert.match(fallback,/HTTP代理出口 13\.214\.76\.191，仅诊断，未作为公网身份/);
 });
 test('explicit monitor endpoint reads budget without login/reservation; foreign origins rejected; hosted mode cannot probe local IP',async()=>{
  const dir=await mkdtemp(path.join(tmpdir(),'ashare-traffic-')),budget=path.join(dir,'budget.db'),old={BS_MONITOR_IP:process.env.BS_MONITOR_IP,BAOSTOCK_BUDGET_PATH:process.env.BAOSTOCK_BUDGET_PATH};let server;

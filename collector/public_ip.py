@@ -1,14 +1,18 @@
 """HTTP monitoring evidence is never proof of BaoStock TCP NAT egress.
-Keep inherited proxy/CA settings, including Windows system proxy discovery.
-Manual declarations affect monitoring only, never connections or host budgets.
+BaoStock dials the provider with a raw TCP socket, so HTTP_PROXY/HTTPS_PROXY and
+Windows system proxies never apply to it; the echo probe therefore connects
+directly as well and reports this host's own egress instead of a proxy exit.
+CA settings are still inherited, a proxy exit stays diagnostics only, and manual
+declarations affect monitoring only, never connections or host budgets.
 """
 import datetime as dt,ipaddress,json,math,os,pathlib,re,socket,time,urllib.request
 from urllib.parse import urlsplit
 
-_IP_ECHO_URLS=('https://api.ipify.org','https://ifconfig.me/ip','https://ip.3322.net','https://4.ipw.cn','https://myip.ipip.net')
+_IP_ECHO_URLS=('https://ip.3322.net','https://myip.ipip.net','https://ifconfig.me/ip','https://api.ipify.org','https://4.ipw.cn')
+_PROXY_EXIT_URL='https://api.ipify.org'
 _IP_CACHE_TTL=600
 _IP_CACHE={}
-_CACHE_VERSION=2
+_CACHE_VERSION=3 # Bumped so identity cached by the proxy-inheriting probe is re-read.
 
 def _extract_ipv4(text):
     for value in re.findall(r'(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])',str(text)):
@@ -47,9 +51,15 @@ def settings_identity(env=None):
     except OSError:stamp=None
     return (env.get('BS_MONITOR_IP',''),path,stamp)
 
-def _fetch(url):
-    # Default ProxyHandler also discovers Windows registry proxies. Keep CA trust.
-    with urllib.request.urlopen(url,timeout=3) as response:return response.read(4096).decode('utf-8',errors='replace')
+def _opener(use_proxy):
+    # The default ProxyHandler discovers environment and Windows registry proxies,
+    # which BaoStock's raw socket ignores; an empty mapping overrides it for the
+    # direct probe while still inheriting CA settings.
+    return urllib.request.build_opener(urllib.request.ProxyHandler() if use_proxy else urllib.request.ProxyHandler({}))
+def _read(url,use_proxy):
+    with _opener(use_proxy).open(url,timeout=3) as response:return response.read(4096).decode('utf-8',errors='replace')
+def _fetch(url):return _read(url,False)
+def _fetch_proxied(url):return _read(url,True)
 
 def _interface_ip():
     try:
@@ -59,7 +69,7 @@ def _interface_ip():
         try:return socket.gethostbyname(socket.gethostname())
         except OSError:return None
 
-def public_ip(cache_path=None,env=None,clock=time.time,fetch=None,interface=None,force=False):
+def public_ip(cache_path=None,env=None,clock=time.time,fetch=None,interface=None,force=False,proxy_fetch=None):
     supplied_env=env is not None;env=os.environ if env is None else env;now=clock();override=env.get('BS_MONITOR_IP','').strip()
     environment_proxies={scheme:env.get(scheme+'_proxy') or env.get(scheme.upper()+'_PROXY') for scheme in ('http','https','all')}
     try:proxies=environment_proxies if supplied_env else urllib.request.getproxies()
@@ -81,7 +91,7 @@ def public_ip(cache_path=None,env=None,clock=time.time,fetch=None,interface=None
         if proxies.get(key):
             try:u=urlsplit(proxies[key]);proxy_hosts.append((key,u.hostname,u.port))
             except ValueError:proxy_hosts.append((key,'invalid',None))
-    context=json.dumps({'version':_CACHE_VERSION,'proxies':proxy_hosts},sort_keys=True);saved=None if force else _IP_CACHE.get(context)
+    context=json.dumps({'version':_CACHE_VERSION,'probe':'direct-tcp','proxies':proxy_hosts},sort_keys=True);saved=None if force else _IP_CACHE.get(context)
     if not saved and cache_path and not force:
         try:
             value=json.loads(pathlib.Path(cache_path).read_text(encoding='utf-8'))
@@ -96,13 +106,19 @@ def public_ip(cache_path=None,env=None,clock=time.time,fetch=None,interface=None
         try:ip=_extract_ipv4((fetch or _fetch)(url))
         except Exception:ip=None
         if ip:
-            evidence=result(ip,'http-echo',echoService=urlsplit(url).hostname,note='HTTP候选IP，不代表BaoStock TCP出口'+('（检测到Windows/系统代理）' if system_proxy else '（检测到HTTP代理）' if proxy else '；VPN或代理分流也可能使两者不同'));break
+            evidence=result(ip,'http-echo',echoService=urlsplit(url).hostname,probeMode='direct-tcp',note='HTTP echo直连探测候选，与BaoStock裸TCP同走本机直连出口'+('（检测到Windows/系统代理，本次探测与BaoStock均未使用）' if system_proxy else '（检测到HTTP代理，本次探测与BaoStock均未使用）' if proxy else '')+'；未独立验证TCP出口，VPN或按目标分流仍可能不同');break
+    # A proxy exit belongs to the proxy node rather than this host's direct route,
+    # so it is reported for diagnosis only and never used as the identity.
+    proxy_exit=None
+    if evidence is None and proxy:
+        try:proxy_exit=_extract_ipv4((proxy_fetch or _fetch_proxied)(_PROXY_EXIT_URL))
+        except Exception:proxy_exit=None
     if evidence is None:
         try:address=(interface or _interface_ip)()
         except Exception:address=None
         try:address=str(ipaddress.ip_address(address)) if address else None
         except ValueError:address=None
-        evidence=result(None,'interface-only' if address else 'unknown',interfaceIP=address,note='未识别公网IPv4；网卡地址仅供诊断，不作为公网配额身份')
+        evidence=result(None,'interface-only' if address else 'unknown',interfaceIP=address,proxyExitIP=proxy_exit,note='未识别本机直连公网IPv4；网卡地址仅供诊断，不作为公网配额身份'+('；HTTP代理出口 '+str(proxy_exit)+' 属于代理节点，BaoStock不走代理，未用作身份' if proxy_exit else ''))
     saved={'context':context,'time':now,'evidence':evidence};_IP_CACHE[context]=saved
     if cache_path:
         try:

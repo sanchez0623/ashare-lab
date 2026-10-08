@@ -1,4 +1,4 @@
-import datetime as dt,json,pathlib,sqlite3,sys,tempfile,unittest,os
+import datetime as dt,json,pathlib,sqlite3,sys,tempfile,unittest,os,urllib.request
 from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/'collector'))
 import public_ip
@@ -18,10 +18,40 @@ class IPTests(unittest.TestCase):
    def fetch(url):calls.append(url);return '192.168.1.1' if len(calls)==1 else '当前 IP：9.9.9.9'
    env={'HTTPS_PROXY':'http://user:mock-secret@proxy.example:8080'}
    first=public_ip.public_ip(path,env=env,clock=lambda:stamp[0],fetch=fetch)
-   self.assertEqual(calls,list(public_ip._IP_ECHO_URLS[:2]));self.assertEqual(first['ip'],'9.9.9.9');self.assertTrue(first['httpProxyDetected']);self.assertFalse(first['tcpEgressVerified']);self.assertNotIn('mock-secret',path.read_text());self.assertNotIn('user:',path.read_text())
+   self.assertEqual(calls,list(public_ip._IP_ECHO_URLS[:2]));self.assertEqual(first['ip'],'9.9.9.9');self.assertTrue(first['httpProxyDetected']);self.assertFalse(first['tcpEgressVerified']);self.assertNotIn('mock-secret',path.read_text(encoding='utf-8'));self.assertNotIn('user:',path.read_text(encoding='utf-8'))
    public_ip._IP_CACHE.clear();stamp[0]=1599
    second=public_ip.public_ip(path,env=env,clock=lambda:stamp[0],fetch=fetch);self.assertTrue(second['cached']);self.assertEqual(second['cacheAgeSeconds'],599);self.assertEqual(len(calls),2)
    stamp[0]=1600;public_ip.public_ip(path,env=env,clock=lambda:stamp[0],fetch=fetch);self.assertEqual(len(calls),3)
+ def test_direct_probe_bypasses_configured_http_proxy(self):
+  # BaoStock dials the provider with a raw TCP socket, which never uses
+  # HTTP_PROXY/HTTPS_PROXY or a Windows system proxy; nor may the probe.
+  env={'HTTPS_PROXY':'http://127.0.0.1:7897','HTTP_PROXY':'http://127.0.0.1:7897'}
+  with patch.dict(os.environ,env,clear=False):
+   # ProxyHandler registers one <scheme>_open dispatcher per configured proxy, so
+   # an empty mapping registers none and the opener cannot reach a proxy at all.
+   def proxies(use_proxy):return [h.proxies for h in public_ip._opener(use_proxy).handlers if isinstance(h,urllib.request.ProxyHandler)]
+   self.assertEqual(proxies(False),[])
+   enabled=proxies(True);self.assertEqual(len(enabled),1);self.assertEqual(enabled[0].get('https'),'http://127.0.0.1:7897')
+ def test_proxy_exit_is_diagnostic_only_when_direct_egress_is_invisible(self):
+  with tempfile.TemporaryDirectory() as root:
+   direct_calls=[];proxy_calls=[]
+   def direct(url):direct_calls.append(url);return None
+   def proxied(url):proxy_calls.append(url);return '13.214.76.191'
+   value=public_ip.public_ip(pathlib.Path(root)/'c.json',env={'HTTPS_PROXY':'http://127.0.0.1:7897'},clock=lambda:1000,fetch=direct,interface=lambda:'192.168.1.2',proxy_fetch=proxied)
+   self.assertEqual(direct_calls,list(public_ip._IP_ECHO_URLS));self.assertEqual(proxy_calls,[public_ip._PROXY_EXIT_URL])
+   self.assertIsNone(value['ip']);self.assertEqual(value['proxyExitIP'],'13.214.76.191');self.assertEqual(value['source'],'interface-only');self.assertEqual(value['interfaceIP'],'192.168.1.2');self.assertTrue(value['httpProxyDetected']);self.assertFalse(value['tcpEgressVerified'])
+ def test_visible_direct_egress_never_probes_the_proxy_exit(self):
+  with tempfile.TemporaryDirectory() as root:
+   def fail(*args):raise AssertionError('proxy probe must not run')
+   value=public_ip.public_ip(pathlib.Path(root)/'c.json',env={'HTTPS_PROXY':'http://127.0.0.1:7897'},clock=lambda:1000,fetch=lambda url:'223.74.108.115',proxy_fetch=fail)
+   self.assertEqual(value['ip'],'223.74.108.115');self.assertEqual(value['source'],'http-echo');self.assertEqual(value['probeMode'],'direct-tcp')
+ def test_proxy_exit_evidence_cached_by_the_older_probe_is_not_reused(self):
+  with tempfile.TemporaryDirectory() as root:
+   path=pathlib.Path(root)/'c.json'
+   legacy=json.dumps({'version':2,'proxies':[['https','127.0.0.1',7897]]},sort_keys=True)
+   path.write_text('{"context":'+json.dumps(legacy)+',"time":1000,"evidence":{"ip":"13.214.76.191","source":"http-echo","observedAt":"2026-10-08T08:36:26+00:00","tcpEgressVerified":false}}',encoding='utf-8')
+   value=public_ip.public_ip(path,env={'HTTPS_PROXY':'http://127.0.0.1:7897'},clock=lambda:1000,fetch=lambda url:'223.74.108.115')
+   self.assertFalse(value['cached']);self.assertEqual(value['ip'],'223.74.108.115')
  def test_bad_cache_and_interface_fallback_never_create_a_public_identity(self):
   with tempfile.TemporaryDirectory() as root:
    path=pathlib.Path(root)/'cache.json'
@@ -71,7 +101,7 @@ class IPTests(unittest.TestCase):
    path=pathlib.Path(root)/'cache.json'
    value=public_ip.public_ip(path,fetch=lambda _: '8.8.4.4',clock=lambda:1000)
    self.assertTrue(value['httpProxyDetected']);self.assertTrue(value['systemProxyDetected']);self.assertFalse(value['tcpEgressVerified'])
-   self.assertIn('系统代理',value['note']);self.assertNotIn('system-user',path.read_text());self.assertNotIn('fixture-password',path.read_text())
+   self.assertIn('系统代理',value['note']);self.assertNotIn('system-user',path.read_text(encoding='utf-8'));self.assertNotIn('fixture-password',path.read_text(encoding='utf-8'))
  def test_manual_setting_persists_wins_over_cache_and_environment_takes_precedence(self):
   with tempfile.TemporaryDirectory() as root:
    config=pathlib.Path(root)/'monitor.json';cache=pathlib.Path(root)/'cache.json';env={'BS_MONITOR_CONFIG':str(config)}
