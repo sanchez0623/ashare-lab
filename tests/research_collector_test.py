@@ -158,17 +158,17 @@ class ResearchCollectorTests(unittest.TestCase):
     def test_custom_short_and_multiyear_collect_exact_bounds_and_separate_warmup(self):
         # SDK transport fixtures exercise the real month/checkpoint/archive
         # flow; their one-bar days do not qualify as formal market data.
-        for start,end in [('2024-05-15','2024-06-04'),('2024-05-01','2026-09-30')]:
-            with self.subTest(start=start,end=end),tempfile.TemporaryDirectory() as root:
-                request={'symbol':'600519','board':'main','rangeMode':'custom','from':start,'to':end,'warmupSessions':60}
+        for start,end,needed in [('2024-05-15','2024-06-04',60),('2024-05-15','2024-06-04',63),('2024-05-01','2026-09-30',60)]:
+            with self.subTest(start=start,end=end,needed=needed),tempfile.TemporaryDirectory() as root:
+                request={'symbol':'600519','board':'main','rangeMode':'custom','from':start,'to':end,'warmupSessions':needed}
                 bs=FakeSDK();bs.fail=False;base=pathlib.Path(root)
                 bundle=collect(request,base/'job',base/'market',bs=bs)
                 metadata=bundle['metadata'];warm=bs.days('2024-01-02',start)[:-1] if dt.date.fromisoformat(start).weekday()<5 else bs.days('2024-01-02',start)
-                self.assertEqual(metadata['requested'],{'from':warm[-60],'to':end})
-                self.assertEqual(metadata['research'],{'from':start,'to':end,'warmupSessions':60})
+                self.assertEqual(metadata['requested'],{'from':warm[-needed],'to':end})
+                self.assertEqual(metadata['research'],{'from':start,'to':end,'warmupSessions':needed})
                 proofs=metadata['provenance']['queries'].values();queries=[p['query'] for p in proofs if p['query'][0]=='minute']
-                self.assertEqual([(q[3],q[4]) for q in queries],list(months(warm[-60],end)))
-                self.assertEqual(min(b['date'][:10] for b in bundle['bars']),warm[-60]);self.assertEqual(max(b['date'][:10] for b in bundle['bars']),end)
+                self.assertEqual([(q[3],q[4]) for q in queries],list(months(warm[-needed],end)))
+                self.assertEqual(min(b['date'][:10] for b in bundle['bars']),warm[-needed]);self.assertEqual(max(b['date'][:10] for b in bundle['bars']),end)
                 before=(base/'job/bundle.json').read_bytes();count=len(bs.calls);collect(request,base/'job',base/'market',bs=bs)
                 self.assertEqual(len(bs.calls),count);self.assertEqual((base/'job/bundle.json').read_bytes(),before)
     def test_pause_and_network_block_do_not_open_a_socket(self):

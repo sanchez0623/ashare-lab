@@ -24,6 +24,9 @@ test('research dates preserve the year default and accept explicit or inferred c
  for(const change of [{rangeMode:'custom'},{from:'2026-02-30'},{from:'2026-10-01'},{from:req.to},{rangeMode:'all'},{rangeMode:'year',from:'2024-01-01'},{from:''},{from:null},{to:'2026-13-01'}])assert.throws(()=>normalizeRequest({...req,...change}),e=>e.code==='REQUEST');
  const today=new Date(Date.now()+8*3600000).toISOString().slice(0,10);assert.throws(()=>normalizeRequest({...req,to:today}),/北京时间今天/);
  assert.equal(normalizeRequest({...req,from:'2024-01-01',config:{dailySlow:120}}).warmupSessions,120);
+ const extended=normalizeRequest({...req,rangeMode:'custom',from:'2024-01-01',warmupSessions:125});assert.equal(extended.warmupSessions,125);assert.equal(extended.config.dailySlow,60);assert.equal(extended.from,'2024-01-01');assert.equal(extended.to,req.to);
+ for(const warmupSessions of [59,60.5,1001,'90',null]){if(warmupSessions===null)continue;assert.throws(()=>normalizeRequest({...req,warmupSessions}),/预热交易日/);}
+ assert.throws(()=>normalizeRequest({...req,config:{dailySlow:120},warmupSessions:90}),/120/);
 });
 test('collection-only persists raw data without membership or backtest; formal admission remains strict',async()=>{
  const b=dataset();b.universe=[];b.metadata.universe='SINGLE_SECURITY';b.metadata.coverage.universe={status:'not-requested'};

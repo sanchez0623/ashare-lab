@@ -8,6 +8,7 @@ import {auditBundle,auditVersion,isAuditAdmitted} from './quality.mjs';
 import {actionDiagnosticReport} from './action-diagnostics.mjs';
 import {officialCorrectionPlan} from './corporate-correction.mjs';
 import {requiredWarmupSessions} from './research-input.mjs';
+import {assessWarmup} from './warmup.mjs';
 import {reconciliationReport} from './reconciliation.mjs';
 import {setupMinuteRepair} from './minute-repair-ui.mjs';
 import {tradeDetailRows,tradeDetailsCSV,tradeDetailsVersion,tradeDetailsPolicy} from './trade-details.mjs';
@@ -163,26 +164,33 @@ async function refreshBacktestSnapshots(){
   catch(e){$('#backtest-catalog-status').textContent=e.message;}finally{snapshotsLoading=false;$('#backtest-data-refresh').disabled=false;}
 }
 $('#backtest-data-refresh').onclick=()=>refreshBacktestSnapshots();
-async function resolveBacktestSymbol(){
+async function resolveBacktestSymbol({warmupSessions=null,stillCurrent=()=>true}={}){
   const symbol=$('#backtest-symbol').value.trim(),c=config();if(!symbol)return;
   if(!/^[0-9]{6}$/.test(symbol))throw Error('请输入六位股票代码。');
+  const initialData=activeBundle??data,signature=JSON.stringify(c);
+  const ensureCurrent=()=>{if(!stillCurrent()||(activeBundle??data)!==initialData||JSON.stringify(config())!==signature)throw Object.assign(Error('预热载入期间行情或参数已改变，请重新开始。'),{code:'STALE_CONTEXT'});};
   const covers=r=>r?.from<=c.from&&r?.to>=c.to;
-  if(activeBundle?.metadata?.symbol===symbol&&covers(activeBundle.metadata.requested))return;
+  const enough=b=>{try{const w=assessWarmup(b,c);return w.sufficient&&(warmupSessions===null||w.availableDailySessions>=warmupSessions);}catch{return false;}};
+  if(activeBundle?.metadata?.symbol===symbol&&covers(activeBundle.metadata.requested)&&enough(activeBundle))return;
   await refreshBacktestSnapshots();
   const matches=[...backtestSnapshots.values()].filter(x=>x.symbol===symbol&&covers(x.report?.requested)).sort((a,b)=>Number(isAuditAdmitted(b.report))-Number(isAuditAdmitted(a.report))||Number(!!b.minuteRepair)-Number(!!a.minuteRepair)||Number(!!b.corporateCorrections)-Number(!!a.corporateCorrections)||b.syncedAt.localeCompare(a.syncedAt));
-  let id=matches[0]?.id;
+  let id=null,bundle=null;
+  for(const match of matches){const b=await api('/api/data/bundle?id='+match.id);ensureCurrent();if(enough(b)){id=match.id;bundle=b;break;}}
   if(!id){
-    const warmupSessions=requiredWarmupSessions(c),lookback=new Date(Date.parse(c.from+'T00:00:00Z')-Math.max(365,warmupSessions*4)*86400000).toISOString().slice(0,10);
+    warmupSessions=Math.max(warmupSessions??0,requiredWarmupSessions(c));const lookback=new Date(Date.parse(c.from+'T00:00:00Z')-Math.max(365,warmupSessions*4)*86400000).toISOString().slice(0,10);
     const parts=[...backtestSnapshots.values()].filter(x=>x.symbol===symbol&&x.timeframe==='5m'&&x.report?.requested?.to>=lookback&&x.report?.requested?.from<=c.to);
-    if(parts.length<2)throw Error(`${symbol} 没有覆盖 ${c.from} — ${c.to} 的本地行情快照。点击“采集此代码与区间”，先完成采集；已有行情不足时需补充对应区间和预热历史。`);
+    if(!parts.length)throw Error(`${symbol} 没有覆盖 ${c.from} — ${c.to} 的本地行情快照。点击“采集此代码与区间”，先完成采集；已有行情不足时需补充对应区间和预热历史。`);
+    ensureCurrent();
     $('#config-status').textContent='正在核验并合并已有行情；不请求行情供应商…';
     const assembled=await api('/api/data/assemble',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol,from:c.from,to:c.to,warmupSessions,snapshots:parts.map(p=>p.id)})});id=assembled.id;backtestSnapshots.set(id,assembled);renderSnapshotOptions();
   }
-  await loadBundle(await api('/api/data/bundle?id='+id),'按代码与日期选取的行情',false,id);
+  bundle??=await api('/api/data/bundle?id='+id);ensureCurrent();
+  await loadBundle(bundle,'按代码与日期选取的行情',false,id);
   setConfig({...c,board:activeBundle.metadata.board,dataMode:bundleMode(activeBundle)});updateSource();renderQuality();
 }
 $('#backtest-code-load').onclick=async()=>{clearReconciliation();const button=$('#backtest-code-load');button.disabled=true;try{if(!$('#backtest-symbol').value.trim())throw Error('请先输入六位股票代码。');await resolveBacktestSymbol();toast('已载入覆盖所选区间的本地行情；日期、策略和资金费用保留，点击运行回测。');}catch(e){showReconciliation(e);$('#config-status').textContent=e.message;$('#config-status').className='config-status error';toast(e.message);}finally{button.disabled=false;}};
-$('#backtest-collect').onclick=()=>{const symbol=$('#backtest-symbol').value.trim();if(!/^[0-9]{6}$/.test(symbol)){toast('请先输入六位股票代码。');return;}const c=config();$('#research-input-mode').value='single';updateResearchInput();$('#research-symbol').value=symbol;$('#research-range').value='custom';$('#research-start').value=c.from;$('#research-end').value=c.to;$('#research-purpose').value='collect';$('#research-period').value=c.timeframe;updateResearchRange();updateResearchPurpose();showView('data');$('#research-form').scrollIntoView({block:'center',behavior:'smooth'});toast('已填入代码与自定义区间；确认后点击“采集行情”。');};
+function openCollection(symbol,warmupSessions=null){if(!/^[0-9]{6}$/.test(symbol)){toast('请先输入六位股票代码；CSV探索需自行补充真实历史后重新导入。');return;}const c=config();$('#research-input-mode').value='single';updateResearchInput();$('#research-symbol').value=symbol;$('#research-range').value='custom';$('#research-start').value=c.from;$('#research-end').value=c.to;$('#research-purpose').value='collect';$('#research-period').value=c.timeframe;$('#research-warmup').value=warmupSessions??'';updateResearchRange();updateResearchPurpose();showView('data');$('#research-form').scrollIntoView({block:'center',behavior:'smooth'});toast(warmupSessions?`已填入 ${warmupSessions} 个预热交易日，研究日期和参数不变；确认后点击“采集行情”。`:'已填入代码与自定义区间；确认后点击“采集行情”。');}
+$('#backtest-collect').onclick=()=>openCollection($('#backtest-symbol').value.trim());
 async function backtestSnapshot(id,request=null){
   await loadBundle(await api('/api/data/bundle?id='+id),'已采集行情',false,id);
   if(request)setConfig({...request.config,from:request.from,to:request.to,timeframe:request.config.timeframe,dataMode:bundleMode(activeBundle)});
@@ -201,7 +209,7 @@ $('#warehouse-refresh').onclick=()=>refreshWarehouse();$('#warehouse-next').oncl
 $('#quality-export').onclick=()=>{download('行情完整性报告.json',JSON.stringify(qualityReport??{status:'unverified',source,message:'普通 CSV / 演示数据没有独立完整性证明。'},null,2),'application/json');};
 $('#bundle-template').onclick=async()=>{try{const b=await fetch('./bundle-example.json').then(r=>r.json());download('完整数据包-合成示例.json',JSON.stringify(b,null,2),'application/json');toast('示例为合成数据，不是可用的真实股票行情。');}catch(e){toast('示例加载失败');}};
 let resizeTimer;window.addEventListener('resize',()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(renderChart,100);});
-optimization=setupOptimization({getContext:()=>({data:activeBundle??data,config:config(),name:dataName,source,snapshotId:activeSnapshotId,quality:qualityReport}),setConfig,showView,runBacktest:run,notify:toast});
+optimization=setupOptimization({getContext:()=>({data:activeBundle??data,config:config(),name:dataName,source,snapshotId:activeSnapshotId,quality:qualityReport}),setConfig,showView,runBacktest:run,notify:toast,prepareHistory:async(warmupSessions,_c,stillCurrent)=>{if(!activeBundle)throw Error('CSV或合成行情不能自动补齐真实历史，请补充源文件后重新导入。');if($('#backtest-symbol').value.trim()!==activeBundle.metadata.symbol)throw Object.assign(Error('证券代码已改变，请先载入对应行情。'),{code:'STALE_CONTEXT'});await resolveBacktestSymbol({warmupSessions,stillCurrent});},prepareCollection:warmupSessions=>openCollection(activeBundle?.metadata.symbol??$('#backtest-symbol').value.trim(),warmupSessions)});
 setupLLM({getContext:()=>({data:activeBundle??data,config:config()}),setConfig,notify:toast});
 repairUI=setupMinuteRepair({getContext:()=>({bundle:activeBundle,snapshotId:activeSnapshotId}),api,loadSnapshot:async id=>{await loadBundle(await api('/api/data/bundle?id='+id),'第二源修复快照',false,id);await refreshWarehouse();},notify:toast});
 selectStrategy('swing');updateSource();renderData();run(false);
@@ -272,13 +280,16 @@ function updateResearchRange(){
 }
 ['#research-range','#research-start','#research-end'].forEach(id=>$(id).addEventListener('input',updateResearchRange));
 updateResearchRange();
-function updateResearchPurpose(){const collectOnly=$('#research-purpose').value==='collect';$('#research-submit').textContent=($('#research-input-mode').value==='batch'?'批量':'')+(collectOnly?'采集行情':'采集并验收');$('#research-purpose-help').textContent=collectOnly?'仅下载、校验并保存指定证券行情；跳过历史沪深300名单，不运行策略回测。仍采集日线、历史ST/停牌、因子和公司行动，用于完整性核验。所选回测周期用于完成后“载入并回测”，原始采集始终5分钟。':'采集行情并验证历史沪深300成员资格；资料通过后运行正式回测、独立复现和账务核对。';$('#research-period').disabled=false;$('#research-period-label').textContent=collectOnly?'回测执行周期':'执行周期';const daily=$('#research-period option[value="1d"]');daily.disabled=!collectOnly;if(!collectOnly&&$('#research-period').value==='1d')$('#research-period').value='15m';}
+function updateResearchWarmup(){const minimum=requiredWarmupSessions({...config(),timeframe:$('#research-period').value});$('#research-warmup').min=minimum;$('#research-warmup').placeholder='自动：'+minimum+' 个交易日';}
+$('#research-period').addEventListener('change',updateResearchWarmup);
+function updateResearchPurpose(){const collectOnly=$('#research-purpose').value==='collect';$('#research-submit').textContent=($('#research-input-mode').value==='batch'?'批量':'')+(collectOnly?'采集行情':'采集并验收');$('#research-purpose-help').textContent=collectOnly?'仅下载、校验并保存指定证券行情；跳过历史沪深300名单，不运行策略回测。仍采集日线、历史ST/停牌、因子和公司行动，用于完整性核验。所选回测周期用于完成后“载入并回测”，原始采集始终5分钟。':'采集行情并验证历史沪深300成员资格；资料通过后运行正式回测、独立复现和账务核对。';$('#research-period').disabled=false;$('#research-period-label').textContent=collectOnly?'回测执行周期':'执行周期';const daily=$('#research-period option[value="1d"]');daily.disabled=!collectOnly;if(!collectOnly&&$('#research-period').value==='1d')$('#research-period').value='15m';updateResearchWarmup();}
 $('#research-purpose').addEventListener('change',updateResearchPurpose);updateResearchPurpose();
 function updateResearchInput(){const batch=$('#research-input-mode').value==='batch';$('#research-single-field').hidden=batch;$('#research-symbol').disabled=batch;$('#research-symbol').required=!batch;$('#research-symbols-field').hidden=!batch;$('#research-symbols').disabled=!batch;$('#research-symbols').required=batch;updateResearchPurpose();updateBatchCodes();}
 function updateBatchCodes(){const field=$('#research-symbols');field.setCustomValidity('');try{const p=parseCollectionCodes(field.value);$('#research-symbols-help').textContent=`${p.symbols.length} 只股票${p.duplicates?' · 去重 '+p.duplicates+' 项':''} · 共用所选日期；串行采集，沿用日预算和限流。`;}catch(e){$('#research-symbols-help').textContent=field.value?e.message:'支持换行、逗号或空格分隔；每批最多300只，重复代码自动去重。';if(field.value)field.setCustomValidity(e.message);}}
 $('#research-input-mode').onchange=updateResearchInput;$('#research-symbols').oninput=updateBatchCodes;updateResearchInput();
 $('#research-form').onsubmit=async e=>{e.preventDefault();updateResearchRange();if(!e.currentTarget.reportValidity())return;const button=$('#research-submit');button.disabled=true;try{
   const batch=$('#research-input-mode').value==='batch',body={purpose:$('#research-purpose').value,rangeMode:$('#research-range').value,from:$('#research-start').value,to:$('#research-end').value,config:{...config(),timeframe:$('#research-period').value}};
+  if($('#research-warmup').value!=='')body.warmupSessions=Number($('#research-warmup').value);
   if(batch){body.symbols=$('#research-symbols').value;parseCollectionCodes(body.symbols);const signature=JSON.stringify(body);if(pendingBatchSubmit?.signature!==signature)pendingBatchSubmit={signature,requestId:crypto.randomUUID()};body.requestId=pendingBatchSubmit.requestId;}else body.symbol=$('#research-symbol').value;
   const submitted=await api(batch?'/api/research/batches':'/api/research/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(batch){pendingBatchSubmit=null;toast(`${submitted.total} 只股票已保存，后台按队列逐只采集${submitted.duplicates?'；重复代码已去重':''}。`);}else toast('任务已保存并提交后台。');await refreshResearch();
 }catch(e){toast(e.message);}finally{button.disabled=false;}};

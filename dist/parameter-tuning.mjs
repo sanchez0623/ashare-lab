@@ -1,7 +1,8 @@
 import {backtest,defaults,validate,qualityScore,compareManagement} from './engine.mjs';
 import {parameterSchema,tuningSpecs,tuningKeys} from './parameter-schema.mjs';
+import {assessWarmup,warmupMessage} from './warmup.mjs';
 
-export const tuningVersion='2';
+export const tuningVersion='3';
 const same=(a,b)=>tuningKeys(a.strategy).every(k=>a[k]===b[k]);
 const clamp=(v,min,max)=>Math.min(max,Math.max(min,v));
 const around=(v,step,min,max)=>[...new Set([v,clamp(Number((v-step).toFixed(6)),min,max),clamp(Number((v+step).toFixed(6)),min,max)])];
@@ -24,6 +25,8 @@ export function tuningCandidates(config,options={}){
 }
 export function tuneParameters(data,config,options={},progress=()=>{}){
   const c={...defaults,...config},search=tuningCandidates(c,options),input=Array.isArray(data)?data:data.bars;
+  const warmup=assessWarmup(data,c,search.candidates.map(p=>p.config));
+  if(!warmup.sufficient)throw Object.assign(Error(warmupMessage(warmup)),{code:'TUNING_WARMUP',warmup});
   const days=[...new Set(input.filter(r=>r.date.slice(0,10)>=c.from&&r.date.slice(0,10)<=c.to).map(r=>r.date.slice(0,10)))].sort();
   if(days.length<20)throw Error('自动微调至少需要20个研究交易日，指标预热历史另行提供。');
   const split=Math.floor(days.length*.7),trainTo=days[split-1],validationFrom=days[split],rows=[];
@@ -45,7 +48,7 @@ export function tuneParameters(data,config,options={},progress=()=>{}){
   }
   const baseline=rows.find(r=>r.isBaseline);
   for(const row of rows)if(row.validation&&baseline.validation)row.validationDelta=row.validation.total-baseline.validation.total;
-  return {schemaVersion:1,type:'parameter-tuning',tuningVersion,inputConfig:c,grid:search.grid,steps:search.steps,rows,baseline,recommendation,qualified:rows.filter(r=>r.quality?.eligible).length,trainFrom:c.from,trainTo,validationFrom,validationTo:c.to,selectionRule:'training_quality_only',positionPolicy:'each segment starts flat; previous bars are indicator warmup only',baselinePolicy:'same market snapshot, dates, capital, fees and position scheme; current parameters are the baseline'};
+  return {schemaVersion:1,type:'parameter-tuning',tuningVersion,warmup,inputConfig:c,grid:search.grid,steps:search.steps,rows,baseline,recommendation,qualified:rows.filter(r=>r.quality?.eligible).length,trainFrom:c.from,trainTo,validationFrom,validationTo:c.to,selectionRule:'training_quality_only',positionPolicy:'each segment starts flat; previous bars are indicator warmup only',baselinePolicy:'same market snapshot, dates, capital, fees and position scheme; current parameters are the baseline'};
 }
 export function tuneManagement(data,config,progress=()=>{}){
   const c={...defaults,...config};progress({phase:'management',completed:0,total:5});

@@ -20,7 +20,7 @@ const failure=(code,message,details)=>Object.assign(Error(message),{code,details
 // Research jobs remain pinned to their strategy engine; collection-only jobs
 // never execute that engine. All collection responses are still revalidated.
 // Unknown pipelines still cannot reuse old work.
-const compatiblePipelines=new Set(['c5db467fb8196caa8a6b68a9af2b65f4b80a650aca3bd79da1c883685591990e','37fa697413f07b2a1701a50d85a55030148c7c5236e125f341be1a3a72a0c100','f16cb4ed61cff168dd1b1b79befa5b9b03d1a555c4c2470dae9792eb760deae9','d7b13b8d804033f7b269d961e14b6e81d993fb45d45c03a6e5610e5b751f1f82','cbfe084871bf787bdd04c3a66462968ba036ab9372758022b316883befd22230','5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c','4b3ee26892f85078e72336fa3c010116d812272e8f16b5a4189fa6702062cb13']);
+const compatiblePipelines=new Set(['9b4f4b276eb73097580a9f4ab61428f50c6ad49b79e47fe97f353a2658df838f','c5db467fb8196caa8a6b68a9af2b65f4b80a650aca3bd79da1c883685591990e','37fa697413f07b2a1701a50d85a55030148c7c5236e125f341be1a3a72a0c100','f16cb4ed61cff168dd1b1b79befa5b9b03d1a555c4c2470dae9792eb760deae9','d7b13b8d804033f7b269d961e14b6e81d993fb45d45c03a6e5610e5b751f1f82','cbfe084871bf787bdd04c3a66462968ba036ab9372758022b316883befd22230','5afc9f0da8aa1fcf7ac888b19d8435c35a38c48b1277b1355bc97359a14968fe','e1b827395f9f64119f1f8fd3cb88e5f41a7de64c7434e9547ee0549805ddb396','42a250326c788ca9a1b81e818537396179b2d6b2b3ad822dee6f44493bd333e9','5ba9106a87d7f621d730eb8366b486f172862bb0950bc1afc326410e1fa83967','29824a5da745fb0d388a82719a4c4ff0c3b0bb3de81b5dc25a61a44ba4d0e36c','4b3ee26892f85078e72336fa3c010116d812272e8f16b5a4189fa6702062cb13']);
 async function atomic(target,value){await mkdir(path.dirname(target),{recursive:true});const temp=target+'.tmp-'+randomUUID(),handle=await open(temp,'wx');try{await handle.writeFile(typeof value==='string'?value:canonical(value));await handle.sync();}finally{await handle.close();}await rename(temp,target);}
 export function yearStart(to){const d=new Date(to+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+1);d.setUTCFullYear(d.getUTCFullYear()-1);return d.toISOString().slice(0,10);}
 export function normalizeRequest(input){
@@ -42,7 +42,8 @@ export function normalizeRequest(input){
   const purpose=input.purpose??'research';if(!['collect','research'].includes(purpose))throw failure('REQUEST','任务用途须为collect或research');
   if(!(purpose==='collect'?['5m','15m','1d']:['5m','15m']).includes(cfg.timeframe))throw failure('REQUEST','仅采集可指定5分钟、15分钟或日线回测；沪深300正式验收需5或15分钟。原始采集均为5分钟');
   validate(cfg);
-  const warmupSessions=requiredWarmupSessions(cfg);
+  const minimumWarmup=requiredWarmupSessions(cfg),warmupSessions=input.warmupSessions??minimumWarmup;
+  if(!Number.isInteger(warmupSessions)||warmupSessions<minimumWarmup||warmupSessions>1000)throw failure('REQUEST',`预热交易日须为 ${minimumWarmup} 至 1000 的整数；不能低于当前参数的预热要求`);
   const budget=input.budget??10000;if(!Number.isInteger(budget)||budget<1||budget>40000)throw failure('REQUEST','日预算须为1至40000，默认10000');
   return {schemaVersion:1,symbol,board,purpose,rangeMode,from,to:input.to,warmupSessions,budget,provider:'baostock',config:cfg};
 }

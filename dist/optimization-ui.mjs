@@ -1,14 +1,19 @@
 import {tuningCandidates} from './parameter-tuning.mjs';
 import {managementNames,periodLabel} from './engine.mjs';
 import {parameterSchema,tuningSpecs,strategyNames,candidateLabel} from './parameter-schema.mjs';
+import {assessWarmup,warmupAvailability,warmupMessage} from './warmup.mjs';
 
-export function setupOptimization({getContext,setConfig,showView,runBacktest,notify}){
+export function setupOptimization({getContext,setConfig,showView,runBacktest,notify,prepareHistory,prepareCollection}){
   const $=s=>document.querySelector(s),escape=v=>String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const number=v=>Number.isFinite(v)?v.toLocaleString('zh-CN',{maximumFractionDigits:2}):'—';
   const percent=v=>Number.isFinite(v)?number(v*100)+'%':'—';
   const changeNames=Object.fromEntries(Object.entries(parameterSchema).map(([k,v])=>[k,v.label]));
   const options=()=>Object.fromEntries([...new FormData($('#tuning-form'))].map(([k,v])=>[k,Number(v)]));
-  let activeRun=null,report=null,reportData=null,stepStrategy=null;
+  let activeRun=null,report=null,reportData=null,stepStrategy=null,historyCache=null,historyPlan=null;
+  function checkHistory(context,candidates){
+    const c=context.config;if(historyCache?.data!==context.data||historyCache.from!==c.from||historyCache.to!==c.to||historyCache.timeframe!==c.timeframe)historyCache={data:context.data,from:c.from,to:c.to,timeframe:c.timeframe,availability:warmupAvailability(context.data,c)};
+    return assessWarmup(context.data,c,candidates,historyCache.availability);
+  }
   const sourceLabel=context=>context.source==='demo'||context.data?.metadata?.synthetic?'合成数据 · 仅验证功能流程':context.source==='bundle'?(context.quality?.status==='warning'?'行情数据包 · 带量价警告（未修复）':context.quality?.status==='passed'?'行情数据包 · 结构校验通过':'行情数据包 · 资料未通过准入'):'CSV探索 · 历史资料未校验';
   function refresh(){
     const context=getContext(),c=context.config;
@@ -20,10 +25,12 @@ export function setupOptimization({getContext,setConfig,showView,runBacktest,not
     document.querySelectorAll('[data-training-key]').forEach(input=>{if(document.activeElement!==input)input.value=c[input.dataset.trainingKey];});
     $('#tuning-source').textContent=context.name+' · '+sourceLabel(context);
     $('#tuning-context').textContent=`${strategyNames[c.strategy]} · ${c.from} — ${c.to} · ${periodLabel(c.timeframe)}\n资金 ¥${number(c.capital)} · ${c.strategy==='swing'?managementNames[c.management]:'固定总仓位上限 '+c.allocation+'%'}\n训练门槛：平仓≥${c.minTrades}笔，盈利因子≥${c.minProfitFactor}，回撤≤${c.maxDrawdown}%`;
-    try{const {grid,candidates}=tuningCandidates(c,options());$('#tuning-grid').textContent=Object.entries(grid).map(([k,v])=>parameterSchema[k].label+'：'+v.join(' / ')).join('；')+`。共${candidates.length}组，包含当前配置；无效的参数组合会跳过。`;}
-    catch(e){$('#tuning-grid').textContent=e.message;}
+    try{const {grid,candidates}=tuningCandidates(c,options());$('#tuning-grid').textContent=Object.entries(grid).map(([k,v])=>parameterSchema[k].label+'：'+v.join(' / ')).join('；')+`。共${candidates.length}组，包含当前配置；无效的参数组合会跳过。`;
+      historyPlan=checkHistory(context,candidates.map(p=>p.config));$('#tuning-history-status').textContent=historyPlan.sufficient?`整轮预热检查通过：需要 ${historyPlan.requiredDailySessions} 个完整交易日 / ${historyPlan.requiredExecutionBars} 根执行周期K线，当前有 ${historyPlan.availableDailySessions} 日 / ${historyPlan.availableExecutionBars} 根。`:warmupMessage(historyPlan)+' 点击开始时先尝试载入本地已有历史。';$('#tuning-history-collect').hidden=historyPlan.sufficient||!prepareCollection;$('#tuning-history-collect').disabled=!!activeRun;
+    }
+    catch(e){historyPlan=null;$('#tuning-grid').textContent=e.message;$('#tuning-history-status').textContent='';$('#tuning-history-collect').hidden=true;}
   }
-  function busy(value){$('#tuning-start').disabled=value;$('#tuning-management').disabled=value||getContext().config.strategy!=='swing';$('#tuning-cancel').hidden=!value;$('#tuning-progress').hidden=!value;$('#tuning-export').disabled=value||!report;}
+  function busy(value){$('#tuning-start').disabled=value;$('#tuning-history-collect').disabled=value;$('#tuning-management').disabled=value||getContext().config.strategy!=='swing';$('#tuning-cancel').hidden=!value;$('#tuning-progress').hidden=!value;$('#tuning-export').disabled=value||!report;}
   async function apply(candidate){
     if((getContext().data)!==reportData){notify('行情已改变，请针对当前行情重新计算后再载入参数。');return;}
     if(!candidate.validation){notify('该候选的验证段未完成，请先查看资料或预热问题。');return;}
@@ -45,11 +52,20 @@ export function setupOptimization({getContext,setConfig,showView,runBacktest,not
   }
   async function start(type){
     if(activeRun)return;
-    const context=getContext(),c={...context.config},search=options();
+    let context=getContext(),c={...context.config};const search=options();
     if(context.source==='import'&&c.dataMode!=='exploration'){notify('CSV未校验历史资料；请载入完整行情包，或明确选择CSV探索。');return;}
     const current={cancelled:false,worker:null,reject:null};activeRun=current;busy(true);$('#tuning-progress').value=0;
     $('#tuning-status').textContent=type==='management'?'正在比较5种仓位方案，资金与费用固定。':'正在自动生成当前参数附近的候选，训练选参后再检查验证段。';
     try{
+      if(context.quality?.status==='blocked')throw Error('数据准入失败：'+(context.quality.blockingIssues??context.quality.issues??[]).map(i=>i.message).join('；'));
+      const candidates=type==='management'?[c]:tuningCandidates(c,search).candidates.map(p=>p.config);let history=checkHistory(context,candidates),prepareError=null;
+      if(!history.sufficient&&prepareHistory){
+        $('#tuning-status').textContent='正在按整轮候选检查并载入本地预热历史，不请求行情供应商…';
+        try{await prepareHistory(history.requiredCollectionSessions,c,()=>!current.cancelled);}catch(e){if(e.code==='STALE_CONTEXT')throw e;prepareError=e;}
+        if(current.cancelled)throw Error('已停止本轮计算；没有应用任何参数。');
+        const next=getContext();if(Object.keys(parameterSchema).some(k=>next.config[k]!==c[k]))throw Error('载入预热期间参数已改变，请重新开始微调。');context=next;c={...next.config};history=checkHistory(context,candidates);refresh();
+      }
+      if(!history.sufficient)throw Error(warmupMessage(history)+(prepareError?' 本地历史载入未完成：'+prepareError.message:''));
       const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(context.data)));
       if(current.cancelled)throw Error('已停止本轮计算；没有应用任何参数。');
       const value=await new Promise((resolve,reject)=>{
@@ -66,6 +82,7 @@ export function setupOptimization({getContext,setConfig,showView,runBacktest,not
     finally{current.worker?.terminate();activeRun=null;busy(false);}
   }
   $('#tuning-form').onsubmit=e=>{e.preventDefault();start('parameters');};$('#tuning-form').oninput=e=>{const key=e.target.dataset.trainingKey;if(key&&e.target.value!==''&&e.target.validity.valid){const field=document.querySelector('#config').elements.namedItem(key);field.value=e.target.value;field.dispatchEvent(new Event('input',{bubbles:true}));}refresh();};
+  $('#tuning-history-collect').onclick=()=>{if(historyPlan&&!historyPlan.sufficient)prepareCollection?.(historyPlan.requiredCollectionSessions);};
   $('#tuning-management').onclick=()=>start('management');
   $('#tuning-cancel').onclick=()=>{if(!activeRun)return;activeRun.cancelled=true;activeRun.worker?.terminate();activeRun.reject?.(Error('已停止本轮计算；没有应用任何参数。'));};
   $('#tuning-export').onclick=()=>{if(!report)return;const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download='青衡-'+(report.type==='parameter-tuning'?'自动微调':'仓位对照')+'-'+report.validationTo+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {defaults,demoMinuteData} from '../dist/engine.mjs';
 import {tuningCandidates,tuneParameters,tuneManagement} from '../dist/parameter-tuning.mjs';
 import {fixture} from './fixture.mjs';
+import {assessWarmup} from '../dist/warmup.mjs';
 
 const data=demoMinuteData().slice(0,48*500);
 const config={...defaults,dataMode:'demo',management:'base',dailyFast:5,dailySlow:20,exitPeriod:5,breakout:5,confirmationDays:1,atrPeriod:5,maxExtensionATR:10,minTrades:5,to:data.at(-1).date.slice(0,10)};
@@ -47,10 +48,21 @@ test('automatic tuning ranks on training only, preserves inputs and reproduces r
 });
 test('tuning cannot manufacture qualification from a small sample, missing warmup or blocked historical data',()=>{
  const b=fixture(100),c={...defaults,from:b.calendar[60],to:b.calendar.at(-1),dataMode:'formal'};
- const result=tuneParameters(b,c);assert.equal(result.recommendation,null);assert.equal(result.qualified,0);
- assert.ok(result.rows.some(r=>r.config.dailySlow===65&&r.error?.includes('65')));assert.equal(result.baseline.quality.reason,'已平仓样本不足');
- assert.throws(()=>tuneParameters(b,{...c,dailySlow:90}),/90/);
- const missing=structuredClone(b);delete missing.daily[61].isST;assert.throws(()=>tuneParameters(missing,c),/准入失败/);
+ assert.throws(()=>tuneParameters(b,c),e=>e.code==='TUNING_WARMUP'&&e.warmup.requiredDailySessions===65&&e.warmup.availableDailySessions===60);
+ const enough={...c,from:b.calendar[65]},result=tuneParameters(b,enough);assert.equal(result.recommendation,null);assert.equal(result.qualified,0);assert.ok(result.rows.every(r=>!r.error));assert.equal(result.baseline.quality.reason,'已平仓样本不足');
+ assert.throws(()=>tuneParameters(b,{...c,dailySlow:90}),/95/);
+ const missing=structuredClone(b);delete missing.daily[61].isST;assert.throws(()=>tuneParameters(missing,enough),/准入失败/);
  const management=tuneManagement(b,c);assert.equal(management.rows.length,5);assert.equal(management.baseline.config.management,'base');assert.equal(management.recommendation,null);assert.equal(management.selectionRule,'training_quality_only');
  for(const row of management.rows)for(const k of costKeys.filter(k=>k!=='management'))assert.equal(row.config[k],c[k]);
+});
+
+test('preflight counts completed daily history rather than minute rows, keeps study dates, and covers execution-period indicators',()=>{
+ const b=fixture(120),c={...defaults,dataMode:'formal',from:b.calendar[60],to:b.calendar.at(-1),dailySlow:60};
+ const configs=tuningCandidates(c,{dailySlowStep:3}).candidates.map(r=>r.config),w=assessWarmup(b,c,configs);
+ assert.equal(w.requiredDailySessions,63);assert.equal(w.availableDailySessions,60);assert.equal(w.missingDailySessions,3);assert.equal(w.sufficient,false);assert.equal(w.researchFrom,c.from);
+ const before=JSON.stringify(b);let progress=0;assert.throws(()=>tuneParameters(b,c,{dailySlowStep:3},()=>progress++),e=>e.code==='TUNING_WARMUP'&&e.warmup.requiredCollectionSessions===63);assert.equal(progress,0);assert.equal(JSON.stringify(b),before);
+ const partial=structuredClone(b);partial.bars=partial.bars.filter(r=>r.date!==b.calendar[10]+' 10:00');assert.equal(assessWarmup(partial,c,configs).availableDailySessions,59);
+ const halted=structuredClone(b);halted.bars=halted.bars.filter(r=>r.date.slice(0,10)!==b.calendar[10]);halted.daily[10].halted=1;assert.equal(assessWarmup(halted,c,configs).availableDailySessions,60);
+ const daily={...c,strategy:'ma',timeframe:'1d',fast:10,slow:60},ma=tuningCandidates(daily).candidates.map(r=>r.config);assert.equal(assessWarmup(b,daily,ma).missingExecutionBars,5);assert.equal(assessWarmup(b,daily,ma).requiredDailySessions,0);
+ const longer=fixture(125),longConfig={...c,from:longer.calendar[65],to:longer.calendar.at(-1)};assert.ok(assessWarmup(longer,longConfig,configs).sufficient);
 });
